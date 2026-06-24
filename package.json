@@ -1,0 +1,25 @@
+{
+  "name": "battlecaos-ship",
+  "version": "1.0.0",
+  "description": "BattleCaos-Ship — Real-time multiplayer naval battle game",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.0",
+    "express": "^4.21.0",
+    "ioredis": "^5.5.0",
+    "jsonwebtoken": "^9.0.2",
+    "google-auth-library": "^9.15.0",
+    "cors": "^2.8.5",
+    "helmet": "^8.0.0",
+    "dotenv": "^16.4.0",
+    "uuid": "^11.0.0"
+  },
+  "devDependencies": {
+    "@socket.io/redis-adapter": "^8.3.0"
+  }
+}

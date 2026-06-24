@@ -1,0 +1,127 @@
+@startuml 02-componentes-game-service
+
+title Diagrama de Componentes — Game Service (Arquitectura Hexagonal)
+header El dominio NO importa nada de infraestructura. Los adaptadores implementan los puertos. (Proyecto.md §5)
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam interface {
+  BackgroundColor LightYellow
+  BorderColor Orange
+}
+skinparam package {
+  BorderColor Black
+  FontStyle bold
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+}
+
+package "INFRAESTRUCTURA (capa externa)" #LightBlue {
+  component "SocketHandlers\nrecibe eventos del Gateway\n(disparo:realizar, poder:usar,\ncolocacion:set, salva:disparo,\ncontramedida:activar)" as IO
+  component "BrokerConsumer\nrecibe eventos del\nMessage Broker\n(RoomReady, TimerEnd,\nPlayerDisconnectedFromRoom,\nPlayerReconnected, BotDecision)" as MQ
+  component "RedisStateAdapter\nimplementa GameStatePort\ngetRoom / saveRoom / deleteRoom" as RS
+  component "RedisLockAdapter\nimplementa LockPort\nSETNX / DEL" as RL
+  component "RedisEventPublisher\nimplementa EventPort\npublish(evento) → Redis Pub/Sub" as EP
+  component "SocketIOBroadcastAdapter\nimplementa BroadcastPort\nio.to(room).emit('sala:estado')" as BC
+  component "TimerMasterAdapter\nimplementa TimerPort\nstartTimer/stopTimer vía broker" as TA
+}
+
+package "APLICACIÓN (casos de uso)" #LightGreen {
+  component "FireShotUseCase\nvalidar turno → disparar →\nenergía → publicar → broadcast" as UC1
+  component "UsePowerUseCase\nvalidar poder → aplicar →\nabrir ventana de contramedida →\nbroadcast" as UC2
+  component "PlaceShipsUseCase\nvalidar flota → colocar →\nbroadcast" as UC3
+  component "StartGameUseCase\nRoomReady → iniciar timer →\nbroadcast" as UC4
+  component "HandleDisconnectUseCase\nPlayerDisconnectedFromRoom →\npausar turno → notificar" as UC5
+  component "HandleReconnectUseCase\nPlayerReconnected →\nreanudar turno → notificar" as UC6
+}
+
+package "DOMINIO (núcleo puro — 0 dependencias externas)" #White {
+  interface "«port»\nGameStatePort" as PG
+  interface "«port»\nLockPort" as PL
+  interface "«port»\nBroadcastPort" as PB
+  interface "«port»\nEventPort" as PE
+  interface "«port»\nTimerPort" as PT
+
+  component "GameEngine\norquesta fases, disparos,\nplacement y poderes" as GE
+  component "Board\ngrid, placeShip, shoot,\nmarkShot, isShipSunk" as BD
+  component "Fleet\ncrear flota, checkSink,\nallSunk" as FL
+  component "Powers\nvalidar/aplicar 5 tipos\nde poder" as PW
+  component "Salvo\nresolución exclusiva por\ncasilla + cadencia mínima" as SV
+  component "Countermeasure\nventana de reacción 5s" as CM
+  component "Energy\nINCRBY/DECRBY conceptual\npor equipo" as EG
+}
+
+' --- Entrada de eventos hacia casos de uso ---
+IO --> UC1 : disparo:realizar / salva:disparo
+IO --> UC2 : poder:usar / contramedida:activar
+IO --> UC3 : colocacion:set
+MQ --> UC4 : RoomReady
+MQ --> UC1 : TimerEnd → forzar fin de fase
+MQ --> UC5 : PlayerDisconnectedFromRoom
+MQ --> UC6 : PlayerReconnected
+MQ --> UC1 : BotDecision → procesar disparo del bot
+
+' --- Casos de uso orquestan el dominio puro ---
+UC1 --> GE : processShot()
+UC2 --> GE : usePower()
+UC3 --> GE : placeShip()
+UC4 --> GE : createSession()
+UC5 --> GE : pauseTurn()
+UC6 --> GE : resumeTurn()
+
+GE --> BD : registerHit()
+GE --> FL : checkSink()
+GE --> PW : validate() / apply()
+GE --> EG : grantEnergy() / spendEnergy()
+GE --> SV : tryShoot() "(fase SALVA)"
+GE --> CM : openWindow() / resolve() "(poderes ofensivos)"
+
+' --- Casos de uso dependen SOLO de los puertos (no de adaptadores) ---
+UC1 --> PG : getRoom / saveRoom
+UC1 --> PL : acquireLock
+UC1 --> PE : publish(ShotFired)
+UC1 --> PB : broadcastState
+UC2 --> PG
+UC2 --> PE : publish(PowerUsed, PowerCompensated)
+UC2 --> PB
+UC3 --> PG
+UC3 --> PE : publish(ShipsPlaced)
+UC3 --> PB
+UC4 --> PT : startTimer
+UC4 --> PE : publish(GameStarted)
+UC5 --> PT : "no detiene el timer, lo pausa"
+UC6 --> PT : "cancela el tiempo de espera"
+SV --> PL : "lock por casilla\n(núcleo de concurrencia)"
+
+' --- Los adaptadores implementan los puertos (inversión de dependencias) ---
+PG <|.. RS : implements
+PL <|.. RL : implements
+PB <|.. BC : implements
+PE <|.. EP : implements
+PT <|.. TA : implements
+
+note bottom of GE
+  El dominio nunca hace `import redis` ni `import socket.io`.
+  `engine.js`, `board.js`, `salvo.js`, etc. son funciones puras
+  que reciben datos planos y devuelven resultados planos.
+  Esto es lo que permite probar el motor sin infraestructura
+  (sección 9.5 de Proyecto.md, Testeabilidad).
+end note
+
+note right of UC5
+  **HandleDisconnectUseCase / HandleReconnectUseCase**
+  son la contraparte, dentro de Game Service, de la corrección
+  aplicada a Room Service: un jugador desconectado NO pierde su
+  turno, solo se pausa hasta que reconecte o venza el tiempo de
+  espera gestionado por Timer Service (ver diagrama de secuencia
+  09-secuencia-desconexion-reconexion.puml).
+end note
+
+@enduml

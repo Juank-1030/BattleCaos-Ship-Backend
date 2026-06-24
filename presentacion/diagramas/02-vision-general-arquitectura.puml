@@ -1,0 +1,108 @@
+@startuml 02-vision-general-arquitectura
+
+title Visión General — Microservicios + Event-Driven + Hexagonal
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 180
+skinparam nodesep 25
+skinparam ranksep 50
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+  FontSize 13
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+  FontSize 14
+}
+skinparam actor {
+  BorderColor Red
+}
+skinparam package {
+  BackgroundColor White
+  BorderColor Gray
+  FontSize 13
+}
+skinparam rectangle {
+  FontSize 12
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 11
+}
+skinparam ArrowFontSize 11
+
+actor "Jugador" as Jugador
+
+component "**Gateway**\núnico punto de entrada público" as Gateway #Wheat
+
+package "①  MICROSERVICIOS — cada uno independiente y escalable por separado" as Micro {
+
+  rectangle "Auth\nService" as Auth #LightGray
+  rectangle "Room\nService" as Room #LightGray
+  rectangle "Timer\nService" as Timer #LightGray
+  rectangle "Chat\nService" as Chat #LightGray
+  rectangle "Bot\nService" as Bot #LightGray
+
+  package "**Game Service** — ③ arquitectura hexagonal" as GameBox #LightYellow {
+    rectangle "**Infraestructura**\nadaptadores: Redis,\nSocket.io, broker" as Infra #LightBlue
+    rectangle "**Aplicación**\ncasos de uso\n(FireShotUseCase, ...)" as App #White
+    rectangle "**Dominio puro**\nGameEngine, Board, Fleet,\nPowers, Salvo — 0 dependencias" as Domain #LightGreen
+
+    Infra -down-> App : implementa\nlos puertos
+    App -down-> Domain : orquesta
+  }
+}
+
+package "②  EVENT-DRIVEN — ningún servicio llama directamente a otro" as EventZone #Lavender {
+  component "**Message Broker**\nRedis Pub/Sub" as Broker #LightGreen
+  component "Observability\n(solo consume eventos)" as Obs #LightGray
+
+  Broker .down.> Obs : consume\n**todos** los eventos
+}
+
+database "**Redis State**\nestado · energía · locks\nKPIs · chat" as Redis
+
+' --- Comunicación síncrona (línea sólida): cliente -> sistema ---
+Jugador -down-> Gateway : WebSocket (Socket.io)
+Gateway -down-> Micro : reenvía cada evento\nal servicio correspondiente\n(síncrono)
+
+' --- Comunicación asíncrona (línea punteada): el corazón del Event-Driven ---
+Micro .down.> Broker : **publish**(RoomReady,\nShotFired, PlayerDisconnectedFromRoom, ...)
+Broker .up.> Micro : **subscribe** — cada servicio solo\nrecibe los eventos que le importan
+
+Micro -[#blue]right-> Redis : leen / escriben\nestado compartido (síncrono)
+
+note left of Domain
+  El dominio NUNCA importa
+  Redis ni Socket.io: solo la
+  capa de Infraestructura
+  los conoce.
+end note
+
+note bottom of Redis
+  Única fuente de verdad.
+  Ningún cliente escribe
+  aquí directamente.
+end note
+
+note right of Gateway
+  Los servicios internos
+  nunca se exponen
+  públicamente.
+end note
+
+legend bottom center
+  <b>①②③ — los tres paradigmas en este mismo diagrama:</b>
+  ① Microservicios: cada caja del paquete es desplegable y escalable por separado.
+  ② Event-Driven: flechas <b>punteadas</b> = publicación/suscripción asíncrona por el Broker (nunca una llamada directa entre servicios).
+  ③ Hexagonal: dentro de Game Service, Dominio → Aplicación → Infraestructura, sin que el dominio conozca la infraestructura.
+  Flechas <b>sólidas</b> = comunicación síncrona (cliente↔Gateway↔servicio, servicio↔Redis).
+end legend
+
+@enduml

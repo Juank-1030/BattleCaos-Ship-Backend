@@ -1,0 +1,79 @@
+@startuml 03-componentes-room-service
+
+title Diagrama de Componentes — Room Service (ciclo de vida de salas y conexión)
+header Corrección aplicada: desconexión ≠ abandono (Proyecto.md §3.3)
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+}
+
+component "RoomService" as RoomService {
+  component "createRoom\n(room:create)\ngenera código único\nde 6 dígitos" as Create
+  component "joinRoom\n(room:join)\nvalida cupo según modo\n(1v1=2, 1v1-bot=1, 2v2=4)\nasigna equipo" as Join
+  component "handleRawDisconnect\nconsume PlayerDisconnected\n(evento crudo del Gateway)" as RawDC
+  component "markDisconnected\nconectado:false\n(NO retira al jugador\nni su flota ni su equipo)" as MarkDC
+  component "handleReconnect\nlocaliza al jugador marcado\nconectado:false por su\ncredencial de sesión" as Reconnect
+  component "markReconnected\nconectado:true\nreasocia el nuevo socket.id" as MarkRC
+  component "checkRoomLifecycle\ndecide si la sala se destruye:\nsolo si TODOS están\nconectado:false Y venció\nel tiempo de espera" as Lifecycle
+}
+
+database "Redis\nsala:{codigo}\n{ jugadores: [{id, conectado, ...}],\n  equipos, fase, modo }" as Redis
+
+actor "Gateway" as GW
+component "Message Broker" as Broker
+component "Timer Service" as Timer
+
+GW -down-> Create : room:create { modo }
+GW -down-> Join : room:join { codigo }
+GW -down-> RawDC : publish(PlayerDisconnected)
+
+Create --> Redis : SET sala:{codigo}\n(fase: LOBBY)
+Join --> Redis : GET / SET sala:{codigo}\n(agrega jugador a jugadores[])
+Join -down-> Broker : publish(RoomReady)\n"cuando la sala se llena"
+Join -down-> Broker : publish(PlayerRoomJoined)
+
+RawDC --> MarkDC : interpreta el evento
+MarkDC --> Redis : actualiza jugador.conectado = false
+MarkDC -down-> Broker : publish(PlayerDisconnectedFromRoom)
+MarkDC --> Lifecycle : evalúa si hay que destruir la sala
+
+Broker -up-> Timer : consume(PlayerDisconnectedFromRoom)\n"inicia el tiempo de espera (DOMF1301)"
+Timer -down-> Broker : publish(TimerEnd { tipo: ABANDONO })\n"si el tiempo de espera vence\nsin reconexión"
+Broker -up-> Lifecycle : consume(TimerEnd ABANDONO)\n"da por retirado al jugador"
+
+Reconnect --> Redis : busca jugador con\nconectado:false en alguna sala
+Reconnect --> MarkRC
+MarkRC --> Redis : actualiza jugador.conectado = true\nreasocia socket.id
+MarkRC -down-> Broker : publish(PlayerReconnected)
+MarkRC --> Lifecycle : cancela el tiempo de espera
+
+Lifecycle --> Redis : DEL sala:{codigo}\n"solo si nadie queda\nconectado ni puede reconectar"
+Lifecycle -down-> Broker : publish(RoomDestroyed)
+
+note bottom of MarkDC
+  **Esta es la pieza que hoy falta corregir en el código real**
+  (`rooms/index.js`, handler `disconnecting`). Hoy retira al
+  jugador del array `jugadores` inmediatamente; debería solo
+  marcarlo como desconectado. Ver Inception.md DOMH05 / DOMF402.
+end note
+
+note bottom of Lifecycle
+  Antes (incorrecto): "limpiar sala si todos se van" se evaluaba
+  con cada desconexión individual.
+  Ahora (corregido): solo se evalúa cuando YA NO QUEDA NADIE
+  conectado, dando margen a que cualquiera reconecte primero.
+end note
+
+@enduml

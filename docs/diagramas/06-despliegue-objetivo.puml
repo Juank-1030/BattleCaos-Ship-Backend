@@ -1,0 +1,121 @@
+@startuml 06-despliegue-objetivo
+
+title Diagrama de Despliegue — Arquitectura Objetivo (post-MVP, escalado horizontal)
+header Visión destino: microservicios independientes (Proyecto.md §2, §8.1, §8.2b) — AÚN NO IMPLEMENTADA
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam node {
+  BackgroundColor LightYellow
+  BorderColor Orange
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+}
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam cloud {
+  BackgroundColor White
+  BorderColor Gray
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+}
+
+actor "Jugador" as Jugador
+
+cloud "Vercel / Render Static" as Frontend {
+  component "Cliente React + Vite" as Client
+}
+
+node "Render Load Balancer\n(o Cloudflare)" as LB
+
+node "Gateway x2-3\n(Render Web Service)" as GWNode {
+  component "Express + Socket.io\nAuth middleware, rate limiting,\nenrutamiento, health check" as GW
+}
+
+node "Auth Service x1" as AuthNode {
+  component "Auth Service\n(solo HTTP)" as Auth
+}
+
+package "Servicios horizontales\n(N réplicas cada uno, Render Web Service)" {
+  node "Room Service\nxN" as RoomNode {
+    component "Room Service" as Room
+  }
+  node "Game Service\nxN" as GameNode {
+    component "Game Service\n(hexagonal)" as Game
+  }
+  node "Chat Service\nxN" as ChatNode {
+    component "Chat Service" as Chat
+  }
+  node "Bot Service\nxN" as BotNode {
+    component "Bot Service" as Bot
+  }
+}
+
+node "Timer Service\n(1 master + N standby)" as TimerNode {
+  component "Timer Service\nleader election" as Timer
+}
+
+node "Observability\nx1 (best-effort)" as ObsNode {
+  component "Observability Service" as Obs
+}
+
+node "Upstash\n(plan pago — HA)" as RedisNode {
+  database "Redis\nSentinel / Cluster\n(estado + Pub/Sub)" as Redis
+}
+
+Jugador -down-> Client : HTTPS
+Client -down-> LB : WSS
+LB -down-> GWNode
+
+GWNode -down-> AuthNode : HTTP verify(token)
+GWNode -down-> RoomNode : WebSocket
+GWNode -down-> GameNode : WebSocket
+GWNode -down-> ChatNode : WebSocket
+GWNode -down-> Redis : publish(PlayerDisconnected)\n"evento crudo"
+
+RoomNode <-down-> Redis
+GameNode <-down-> Redis
+ChatNode <-down-> Redis
+TimerNode <-down-> Redis : leader election\n(SET NX EX + heartbeat 500ms)
+ObsNode -down-> Redis : write KPIs
+
+RoomNode .down.> Redis : publish/consume eventos\n(Pub/Sub)
+GameNode .down.> Redis
+ChatNode .down.> Redis
+BotNode .down.> Redis
+TimerNode .down.> Redis
+ObsNode .down.> Redis : consume(*)
+
+note bottom of RedisNode
+  **Sigue siendo el cuello de botella real** (Proyecto.md §9.6).
+  Con plan gratuito: 10K comandos/día. Para 500+ partidas
+  concurrentes (~4,000 cmd/s) se necesita plan Enterprise.
+end note
+
+note bottom of GWNode
+  **SPOF mitigado** con 2+ réplicas + balanceador.
+  Sigue siendo el único punto de entrada público
+  (principio arquitectónico #5).
+end note
+
+note as Costo
+  Costo estimado post-MVP: ~$7/mes por servicio adicional
+  en Render + ~$15/mes por el plan pago de Upstash
+  (Proyecto.md §8.2b). Ya no es $0.
+end note
+
+note as Roadmap
+  Esta topología es la **meta del roadmap de 2 sprints**
+  (Proyecto.md §10), no algo a desplegar ya. El refactor
+  hexagonal de Game Service es opcional dentro del Sprint 1;
+  la separación física en procesos independientes es post-MVP.
+end note
+
+@enduml
