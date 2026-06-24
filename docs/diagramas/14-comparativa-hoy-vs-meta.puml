@@ -1,0 +1,120 @@
+@startuml 14-comparativa-hoy-vs-meta
+
+title Diagrama de Componentes — Estado Actual (HOY) vs. Arquitectura Híbrida (META)
+header Roadmap real: 2 sprints, alineados con Inception.md — Proyecto.md §9.7, §10
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+}
+
+package "HOY: Monolito Modular (19 archivos, ~729 LOC)" #LightYellow {
+  component "index.js" as Index
+  component "config/" as Cfg
+  component "auth/" as Auth
+  component "rooms/" as Rooms
+  component "game/*" as GameMon
+  component "state/" as State
+  component "timer/master.js" as TimerMon
+  component "chat/" as ChatMon
+  component "bot/" as BotMon
+  component "observability/" as ObsMon
+  database "Redis\n(Upstash, plan Free)" as RedisHoy
+
+  Index --> Cfg
+  Index --> Auth
+  Index --> Rooms
+  Index --> GameMon
+  Index --> State
+  Index --> TimerMon
+  Index --> ChatMon
+  Index --> BotMon
+  Index --> ObsMon
+  GameMon <--> RedisHoy
+  Rooms <--> RedisHoy
+  State <--> RedisHoy
+
+  note bottom of GameMon
+    Todo en un solo proceso Node.js.
+    `game/*` importa `ioredis` directamente
+    (sin puertos ni adaptadores todavía).
+    Testeabilidad HOY: 30% (Proyecto.md §9.7).
+    Disponibilidad HOY: 50% (Timer Master sin
+    redundancia real si crashea el proceso).
+    Desempeño HOY: 95% (~8ms por disparo,
+    sin latencia de red entre módulos).
+  end note
+}
+
+package "META: Arquitectura Híbrida (post 2 sprints + post-MVP)" #LightGreen {
+  component "Gateway\n(Express + Socket.io)" as GWNew
+
+  package "Microservicios independientes" {
+    component "Auth Service" as AuthNew
+    component "Room Service" as RoomNew
+    component "Chat Service" as ChatNew
+    component "Bot Service" as BotNew
+    component "Timer Service" as TimerNew
+    component "Observability Service" as ObsNew
+  }
+
+  package "Game Service (hexagonal)" {
+    component "Adaptadores\n(Redis, Socket.io, Timer)" as Adapters
+    component "Casos de uso\n(FireShotUseCase, etc.)" as UC
+    component "Dominio puro\n(GameEngine, Board, Fleet,\nPowers, Salvo, Energy, CM)" as Domain
+  }
+
+  database "Redis\n(Upstash, plan pago,\nSentinel/Cluster)" as RedisMeta
+
+  GWNew --> AuthNew : HTTP
+  GWNew --> RoomNew : WebSocket
+  GWNew --> ChatNew : WebSocket
+  GWNew --> Adapters : WebSocket
+  Adapters --> UC
+  UC --> Domain
+  Adapters <--> RedisMeta
+  RoomNew <--> RedisMeta
+  ChatNew <--> RedisMeta
+  TimerNew <--> RedisMeta
+  ObsNew --> RedisMeta : write KPIs
+
+  note bottom of Domain
+    0 dependencias externas: ni `ioredis`,
+    ni `socket.io`, ni `express`. Solo Node puro.
+    Testeable con mocks (`MockStatePort`).
+    Testeabilidad META: 100%.
+    Disponibilidad META: 85% (Timer Service
+    independiente, failover automático <1.5s).
+    Desempeño META: 80% (~40ms por disparo,
+    +5x de latencia: el costo de descomponer
+    en servicios — Proyecto.md lo reconoce
+    explícitamente como trade-off).
+  end note
+}
+
+GameMon -[#blue,dashed]down-> Domain : "Sprint 1 (opcional):\nrefactor hexagonal interno,\nSIN cambiar el despliegue"
+Index -[#blue,dashed]down-> GWNew : "Post-MVP:\nseparación física en\nprocesos independientes"
+
+note as Resumen
+  **El roadmap real son 2 sprints** (no 4, no 6),
+  alineados 1:1 con las historias de Inception.md:
+  Sprint 1 = DOMH01-09 / UIUXH01-08 / DOCH01-03
+  Sprint 2 = DOMH10-15 / UIUXH09-13 / DOCH04-05
+
+  La migración a microservicios como procesos
+  independientes es **post-MVP**, no parte de
+  los 2 sprints de entrega académica.
+end note
+
+@enduml

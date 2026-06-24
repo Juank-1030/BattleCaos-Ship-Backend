@@ -1,0 +1,91 @@
+@startuml 07-secuencia-disparo-turnos
+
+title Diagrama de Secuencia — Disparo en Fase de Turnos
+header Flujo completo: cliente → Gateway → Game Service → Redis → Broker → Observability/Bot
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam participant {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+}
+skinparam sequenceMessageAlign center
+
+actor Jugador as C
+participant "Gateway" as GW
+participant "Auth\nService" as AU
+participant "Game\nService" as GS
+participant "Timer\nService" as TS
+participant "Bot\nService" as BS
+participant "Observability\nService" as OS
+database "Redis\nState" as RS
+database "Redis\nPub/Sub" as BR
+
+== Validación de identidad ==
+C -> GW : disparo:realizar { x:3, y:5, token }
+GW -> AU : verify(token)
+AU --> GW : { playerId, name }
+
+== Procesamiento del disparo ==
+GW -> GS : forward(disparo:realizar)
+GS -> RS : getRoom(codigo)
+RS --> GS : { room state }
+GS -> GS : GameEngine.processShot()
+note right
+  Valida: fase == TURNOS,
+  turno == jugadorActual,
+  coordenada dentro de límites
+  y no disparada antes
+end note
+alt Disparo inválido
+  GS --> GW : ack({ ok: false, error })
+  GW --> C : error visible
+else Disparo válido
+  GS -> RS : saveRoom(room)
+  GS -> GS : Board.markShot(x, y)
+  GS -> GS : Fleet.checkSink(shipId)?
+  GS -> GS : Energy.grantEnergy(equipo, 1)
+  GS -> RS : INCRBY energía
+  alt Hundió el barco
+    GS -> GS : Energy.grantEnergy(equipo, 2)
+    GS -> RS : INCRBY energía
+    GS -> BR : publish(ShipSunk { shipId, equipos })
+  end
+  GS -> GW : broadcastState(room.snapshot)
+  GW -> C : sala:estado { tableros, energia, turno, fase }
+end
+
+== Distribución de eventos ==
+GS -> BR : publish(ShotFired { x, y, result, energiaRestante })
+BR -> OS : consume(ShotFired)
+OS -> RS : actualiza métricas\n(disparosTotal, latencia)
+BR -> BS : consume(ShotFired)
+alt Modo 1v1-bot Y es turno del bot
+  BS -> BS : decide la próxima jugada
+  BS -> BR : publish(BotDecision { x, y })
+  BR -> GS : consume(BotDecision)
+  GS -> GS : processShot() "(mismo flujo, jugador = bot)"
+end
+
+== Cambio de turno / fase ==
+GS -> BR : publish(PhaseChanged { from: TURNOS, to: SALVA })
+note right
+  Ocurre cada 3 rondas
+  (condición de activación de DOMH12)
+end note
+BR -> TS : consume(PhaseChanged)
+TS -> TS : startTimer(SALVA, 8s)
+loop cada 100ms hasta que expire
+  TS -> BR : publish(TimerTick { remaining })
+  BR -> GW : consume(TimerTick)
+  GW -> C : salva:tick { remaining }
+end
+BR -> GS : publish(TimerEnd { tipo: SALVA })
+GS -> GS : processSalvaEnd()
+
+@enduml

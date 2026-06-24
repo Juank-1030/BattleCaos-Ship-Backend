@@ -1,0 +1,61 @@
+@startuml 12-estados-conexion-jugador
+
+title Diagrama de Estados — Conexión de un Jugador dentro de una Partida
+header Inception.md DOMH05/DOMF402, DOMH15/DOMF1301 — corrección de desconexión vs. abandono
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam state {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+}
+
+[*] --> Conectado : se une a la sala\n(room:join exitoso)
+
+state Conectado {
+  Conectado : conectado = true
+  Conectado : conserva su lugar, equipo,\ntablero, energía y turno
+}
+
+state Desconectado {
+  Desconectado : conectado = false
+  Desconectado : **NO se retira de jugadores[]**
+  Desconectado : se inicia un tiempo de\nespera (gestionado por Timer Service)
+  Desconectado : si era su turno, queda\nPAUSADO (no se pasa al siguiente)
+}
+
+state RetiradoDefinitivo {
+  RetiradoDefinitivo : se libera su lugar en la partida
+  RetiradoDefinitivo : ya no puede recuperar el estado
+}
+
+Conectado --> Desconectado : pierde la conexión\n(corte de red, cierre de pestaña)\npublish(PlayerDisconnectedFromRoom)
+
+Desconectado --> Conectado : reconecta con su\ncredencial de sesión\nANTES de que venza el tiempo de espera\npublish(PlayerReconnected)
+
+Desconectado --> RetiradoDefinitivo : vence el tiempo de espera\nSIN reconexión\n(TimerEnd { tipo: ABANDONO })
+
+Conectado --> RetiradoDefinitivo : abandono explícito\n(el jugador sale voluntariamente)
+
+RetiradoDefinitivo --> [*]
+
+note right of Desconectado
+  **Este es el estado que hoy NO existe en el código real.**
+  `rooms/index.js` salta directamente de Conectado a
+  RetiradoDefinitivo apenas se pierde el socket — por eso
+  hoy no hay nada que reconectar (ver diagrama 09).
+end note
+
+note left of RetiradoDefinitivo
+  Solo cuando **todos** los jugadores de una sala llegan
+  a este estado, la sala se destruye (`RoomDestroyed`).
+  Antes de la corrección, esto se evaluaba erróneamente
+  con cada desconexión individual.
+end note
+
+@enduml

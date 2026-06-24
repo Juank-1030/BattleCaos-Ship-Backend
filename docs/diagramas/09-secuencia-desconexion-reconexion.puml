@@ -1,0 +1,93 @@
+@startuml 09-secuencia-desconexion-reconexion
+
+title Diagrama de Secuencia — Desconexión y Reconexión (corregido)
+header Inception.md DOMH05/DOMF401/DOMF402, DOMH15/DOMF1301 — Proyecto.md §3.3, §7.2 — EC-03
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam participant {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+}
+skinparam sequenceMessageAlign center
+
+actor "Jugador" as P
+participant "Gateway" as GW
+participant "Room\nService" as RM
+participant "Game\nService" as GS
+participant "Timer\nService" as TM
+database "Redis\nsala:{codigo}" as RS
+
+== Pérdida de conexión (no es abandono) ==
+P -[#red]-> GW : (corte de red / cierre de pestaña)
+GW -> GW : detecta el socket caído
+GW -> RM : publish(PlayerDisconnected { codigo, playerId })
+note right
+  Evento "crudo": solo informa que el socket
+  se cayó. Todavía NO se sabe si es un corte
+  breve o un abandono real.
+end note
+
+RM -> RS : GET sala:{codigo}
+RS --> RM : { jugadores: [...] }
+RM -> RM : marca jugador.conectado = false
+note left
+  **Corrección clave (DOMF402):** el jugador
+  NO se elimina de `jugadores[]`, conserva su
+  equipo, tablero, energía y turno tal como
+  estaban.
+end note
+RM -> RS : SET sala:{codigo} (jugador actualizado)
+RM -> GS : publish(PlayerDisconnectedFromRoom { codigo, playerId })
+RM -> TM : (implícito vía broker) inicia tiempo de espera
+
+GS -> GS : si era su turno, PAUSARLO\n(no pasarlo al siguiente)
+TM -> TM : startTimer(ABANDONO, codigo, playerId)
+note right
+  Tiempo de espera definido por DOMF1301
+  (Sprint 2). Mientras corre, el jugador
+  sigue "reservando" su lugar.
+end note
+
+GW -> P : (otros jugadores) "Jugador X se desconectó"
+
+== Camino A: el jugador reconecta a tiempo ==
+P -> GW : conecta con su credencial de sesión
+GW -> RM : forward(reconexión, token)
+RM -> RS : busca sala donde playerId\nfigura con conectado:false
+RS --> RM : { codigo, room state }
+RM -> RM : marca jugador.conectado = true\nreasocia el nuevo socket.id
+RM -> RS : SET sala:{codigo} (actualizado)
+RM -> TM : cancelar tiempo de espera (ABANDONO)
+RM -> GS : publish(PlayerReconnected { codigo, playerId })
+GS -> GS : reanuda al jugador donde estaba
+GS -> GW : broadcastState(room.snapshot)
+GW -> P : sala:estado { ... } "igual que si nunca se hubiera ido"
+
+== Camino B: el tiempo de espera vence sin reconexión ==
+TM -> TM : timer ABANDONO expira
+TM -> RM : publish(TimerEnd { tipo: ABANDONO, playerId })
+RM -> RM : da por retirado definitivamente al jugador
+RM -> RS : actualiza/retira al jugador,\nlibera su lugar en la partida
+RM -> RM : checkRoomLifecycle()
+alt Ya no queda nadie conectado
+  RM -> RS : DEL sala:{codigo}
+  RM -> GW : publish(RoomDestroyed { codigo })
+else Aún quedan jugadores conectados
+  RM -> GS : notifica abandono definitivo\n"(la partida continúa sin él)"
+end
+
+note over RS
+  **Estado real del código (verificado):** hoy
+  `rooms/index.js` hace lo del "Camino B" inmediatamente
+  al perder la conexión, sin pasar por el "Camino A".
+  Esta corrección (DOMF402) es la prioridad antes de
+  construir la reconexión (DOMF401).
+end note
+
+@enduml

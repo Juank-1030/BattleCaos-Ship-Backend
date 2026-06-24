@@ -1,0 +1,61 @@
+@startuml 04-evolucion-monolito-a-microservicios
+
+title Evolución: Monolito Modular → Arquitectura Híbrida
+
+!theme plain
+left to right direction
+skinparam defaultFontName Consolas
+skinparam wrapWidth 190
+skinparam nodesep 45
+skinparam ranksep 70
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam rectangle {
+  BorderColor Black
+  FontSize 14
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 12
+}
+skinparam ArrowColor #333333
+skinparam ArrowFontSize 12
+
+rectangle "**HOY**\nMonolito modular\n19 archivos, ~729 LOC\n1 solo proceso Node.js" as Hoy #LightYellow
+
+rectangle "**SPRINT 1**\nCompletar handlers vacíos\n(colocación, disparo, reconexión)\n+ refactor hexagonal de game/\n(opcional, sin cambiar despliegue)" as Sprint1 #LightGreen
+
+rectangle "**SPRINT 2**\nCompletar handlers de poderes,\nsalva y contramedida\n+ observabilidad y KPIs\n+ timeouts de turno" as Sprint2 #LightGreen
+
+rectangle "**POST-MVP**\nSeparación física en\nmicroservicios independientes\n+ Redis con alta disponibilidad\n+ Gateway replicado" as PostMVP #LightBlue
+
+Hoy -right-> Sprint1 : entrega académica\n(2 sprints)
+Sprint1 -right-> Sprint2
+Sprint2 -right-> PostMVP : evolución\n(fuera del MVP)
+
+note bottom of Hoy
+  Testeabilidad: 30%
+  Disponibilidad: 50%
+  Modificabilidad: 60%
+end note
+
+note bottom of Sprint1
+  Sigue siendo 1 solo
+  proceso desplegado.
+  Costo: $0.
+end note
+
+note bottom of Sprint2
+  MVP completo, listo
+  para la entrega.
+  Costo: $0.
+end note
+
+note bottom of PostMVP
+  Testeabilidad: 100% · Modificabilidad: 100%
+  Disponibilidad: 85% · Escalabilidad: 90%
+  Costo: ~$7/mes/servicio + ~$15/mes Redis HA
+end note
+
+@enduml

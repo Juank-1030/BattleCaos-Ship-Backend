@@ -1,0 +1,142 @@
+@startuml 05-componentes-por-servicio
+
+title Componentes Internos de Cada Microservicio
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 170
+skinparam nodesep 22
+skinparam ranksep 45
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+  FontSize 12
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+  FontSize 13
+}
+skinparam actor {
+  BorderColor Red
+}
+skinparam package {
+  BackgroundColor White
+  BorderColor Gray
+  FontSize 12
+}
+skinparam rectangle {
+  FontSize 11
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 10
+}
+skinparam ArrowFontSize 10
+
+actor "Jugador" as Jugador
+
+component "**Gateway**\nExpress + Socket.io\nAuth middleware · Rate limiting\nEnrutamiento · GET /health" as Gateway #Wheat
+
+' ===================== FILA 1: servicios simples =====================
+together {
+  package "Auth Service" as AuthBox #LightCyan {
+    rectangle "Middleware\nverify(JWT)" as Auth1
+    rectangle "createToken()\nGoogle OAuth → JWT" as Auth2
+  }
+
+  package "Room Service" as RoomBox #LightCyan {
+    rectangle "createRoom / joinRoom\ncódigo único, cupo, equipos" as Room1
+    rectangle "markDisconnected /\nmarkReconnected\nconectado: true|false" as Room2
+    rectangle "checkRoomLifecycle\ndestruye solo si\nnadie queda conectado" as Room3
+  }
+
+  package "Timer Service" as TimerBox #LightCyan {
+    rectangle "Leader election\nSET NX EX + heartbeat 500ms" as Timer1
+    rectangle "startTimer / stopTimer\nCOLOCACION · TURNO\nSALVA · CONTRAMEDIDA" as Timer2
+    rectangle "Tick broadcaster\ncada 100ms" as Timer3
+  }
+}
+
+' ===================== FILA 2: servicios no críticos =====================
+together {
+  package "Chat Service" as ChatBox #LightCyan {
+    rectangle "recibe chat:mensaje\nrutea equipo/global" as Chat1
+    rectangle "persiste últimos\n100 mensajes" as Chat2
+  }
+
+  package "Bot Service" as BotBox #LightCyan {
+    rectangle "escucha ShotFired\n(modo 1v1-bot)" as Bot1
+    rectangle "decide disparo\n(hoy random)" as Bot2
+  }
+
+  package "Observability Service" as ObsBox #LightCyan {
+    rectangle "consume TODOS\nlos eventos (*)" as Obs1
+    rectangle "calcula KPIs\nlatencia, % reconexión,\n% partidas completadas" as Obs2
+  }
+}
+
+' ===================== Game Service — el más complejo (hexagonal) =====================
+package "**Game Service** — arquitectura hexagonal" as GameBox #LightYellow {
+
+  package "Infraestructura (adaptadores)" as Infra #LightBlue {
+    rectangle "RedisStateAdapter" as IA1
+    rectangle "RedisLockAdapter" as IA2
+    rectangle "SocketIOBroadcastAdapter" as IA3
+    rectangle "RedisEventPublisher" as IA4
+    rectangle "TimerMasterAdapter" as IA5
+  }
+
+  package "Aplicación (casos de uso)" as App #White {
+    rectangle "FireShotUseCase" as UC1
+    rectangle "UsePowerUseCase" as UC2
+    rectangle "PlaceShipsUseCase" as UC3
+    rectangle "HandleDisconnectUseCase /\nHandleReconnectUseCase" as UC4
+  }
+
+  package "Dominio puro (0 dependencias)" as Domain #LightGreen {
+    rectangle "GameEngine" as D1
+    rectangle "Board · Fleet" as D2
+    rectangle "Powers · Energy" as D3
+    rectangle "Salvo\n(núcleo de concurrencia)" as D4
+    rectangle "Countermeasure" as D5
+  }
+
+  Infra -down-> App : implementa\nlos puertos
+  App -down-> Domain : orquesta
+}
+
+component "**Message Broker**\nRedis Pub/Sub" as Broker #Lavender
+database "**Redis State**" as Redis #LightBlue
+
+' ===================== Conexiones generales =====================
+Jugador -down-> Gateway : WebSocket
+
+Gateway -down-> AuthBox : HTTP verify(token)
+Gateway -down-> RoomBox : room:create / room:join
+Gateway -down-> GameBox : disparo:realizar / poder:usar /\ncolocacion:set / salva:disparo
+
+AuthBox .right.> Broker
+RoomBox .down.> Broker
+TimerBox .down.> Broker
+ChatBox .down.> Broker
+BotBox .down.> Broker
+GameBox .down.> Broker
+Broker .right.> ObsBox : consume **todos**\nlos eventos
+
+RoomBox -[#blue]-> Redis
+TimerBox -[#blue]-> Redis
+ChatBox -[#blue]-> Redis
+IA1 -[#blue]down-> Redis : getRoom / saveRoom
+IA2 -[#blue]down-> Redis : SETNX (lock por casilla)
+
+legend bottom center
+  <b>Convención:</b> flechas <b>sólidas</b> = comunicación síncrona (HTTP, Socket.io, lectura/escritura en Redis).
+  Flechas <b>punteadas</b> = eventos asíncronos a través del Message Broker (Event-Driven).
+  Dentro de Game Service: Infraestructura → Aplicación → Dominio puro (Arquitectura Hexagonal) — el dominio nunca conoce Redis ni Socket.io.
+end legend
+
+@enduml

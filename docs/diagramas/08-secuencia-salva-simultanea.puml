@@ -1,0 +1,78 @@
+@startuml 08-secuencia-salva-simultanea
+
+title Diagrama de Secuencia — Ronda de Disparo Simultáneo (núcleo de concurrencia)
+header Reto técnico central del proyecto (Inception.md DOMH12/DOMF1002, Proyecto.md §9.3) — EC-02
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 220
+skinparam participant {
+  BackgroundColor LightGray
+  BorderColor Black
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+}
+skinparam sequenceMessageAlign center
+
+actor "Jugador A" as A
+actor "Jugador B" as B
+participant "Gateway" as GW
+participant "Game Service\n(instancia X)" as GSX
+participant "Game Service\n(instancia Y)" as GSY
+database "Redis\n(lock compartido\nentre TODAS las instancias)" as RS
+
+note over A, B
+  Ambos jugadores disparan casi al mismo instante,
+  a la **misma casilla** (x:5, y:7), durante la
+  ventana de Salva de 8s. Sus peticiones pueden llegar
+  a réplicas DISTINTAS del Game Service.
+end note
+
+A -> GW : salva:disparo { x:5, y:7 }
+B -> GW : salva:disparo { x:5, y:7 }
+
+GW -> GSX : forward(A → x:5,y:7)
+GW -> GSY : forward(B → x:5,y:7)
+
+par Procesamiento concurrente en dos instancias distintas
+  GSX -> RS : GET sala:ultimoDisparo:{codigo}:A
+  RS --> GSX : "(cadencia OK, >= 1.5s desde el último)"
+  GSX -> RS : **SETNX** sala:lock:{codigo}:5,7 = "A"
+  RS --> GSX : 1 (lock conseguido)
+  GSX -> RS : SET sala:ultimoDisparo:{codigo}:A = now
+  GSX -> GSX : resolver impacto/agua para A
+else
+  GSY -> RS : GET sala:ultimoDisparo:{codigo}:B
+  RS --> GSY : "(cadencia OK)"
+  GSY -> RS : **SETNX** sala:lock:{codigo}:5,7 = "B"
+  RS --> GSY : 0 (la clave YA EXISTÍA)
+  GSY -> GSY : rechazar como "salva:already_shot"
+end
+
+GSX -> GW : ack(A) → { ok: true, result: "impacto" }
+GW -> A : resultado: impacto confirmado
+
+GSY -> GW : ack(B) → { ok: false, error: "salva:already_shot" }
+GW -> B : disparo rechazado\n(la casilla ya fue resuelta)
+
+note over RS
+  **Por qué esto funciona aunque A y B lleguen a instancias
+  distintas:** el lock vive en Redis, NO en la memoria de
+  cada instancia del Game Service. `SETNX` es atómico a nivel
+  del servidor Redis — solo una de las dos llamadas puede
+  devolver 1 (éxito), sin importar en qué proceso se ejecutó.
+  Esto es lo que hace posible escalar el Game Service
+  horizontalmente sin romper la exclusión mutua (EC-02).
+end note
+
+note over GSX, GSY
+  **Validación de cadencia** (control de ritmo, no de
+  exclusión): cada jugador debe esperar >= 1.5s entre sus
+  propios disparos, sin importar a qué casilla dispare.
+  Esto evita que gane "el click más rápido" por sí solo,
+  independientemente del lock por casilla.
+end note
+
+@enduml
