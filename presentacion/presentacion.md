@@ -77,7 +77,7 @@
 > - **Defensivo/Sabotaje** (Escudo, Tormenta): cambian el ritmo del rival en vez de atacar directamente — Tormenta es de un solo uso por partida, así que su momento de activación es una decisión de alto riesgo.
 > - **Reactivo** (Contramedida): es el único poder que no se "usa", se "activa justo a tiempo" — y solo aplica contra Bombardeo o Sonar (los ofensivos). Si el defensor reacciona dentro de los 5s, el poder se anula y la energía gastada se devuelve íntegra al atacante.
 >
-> Este catálogo es también el ejemplo vivo de Modificabilidad (`EC-05`, sección 3): agregar un sexto poder, en la arquitectura hexagonal propuesta, debería tocar como máximo el archivo del dominio de poderes — no el motor de turnos, no la energía, no la salva.
+> Este catálogo es también el ejemplo vivo de Modificabilidad (`EC-05`, sección 3): agregar un sexto poder, con la arquitectura Domain Kernel propuesta, debería tocar como máximo el archivo del dominio de poderes y su handler de orquestación — no el motor de turnos, no la energía, no la salva.
 
 ---
 
@@ -138,19 +138,19 @@ Un escenario de calidad = requisito medible en 6 partes: Fuente, Estímulo, Arte
 
 | Atributo | Por qué este proyecto lo necesita | Hoy → Meta |
 |----------|-------------------------------------|:---:|
-| **Desempeño** | La Salva exige resolver disparos concurrentes en milisegundos | 95% → 80% |
+| **Desempeño** | La Salva exige resolver disparos concurrentes en milisegundos | 95% → 90% |
 | **Disponibilidad** | Multijugador real-time sobre redes inestables: las caídas son la norma | 50% → 85% |
 | **Seguridad** | El "servidor autoritativo" solo vale si nadie no identificado puede alterar una partida | 90% → 90% |
 | **Escalabilidad** | "Salas concurrentes sostenidas" es un KPI de negocio declarado | 60% → 90% |
 
 > **Notas del orador:**
 > Cada atributo tiene su ejemplo de aplicación:
-> - **Desempeño:** el Game Service usa `SETNX` de Redis como árbitro atómico en vez de un `if` en memoria — es lo único que garantiza `EC-02` aunque dos disparos lleguen a réplicas distintas. Es el único atributo que *empeora* en la meta (95%→80%), por la latencia de red entre servicios (~8ms→~40ms) — trade-off aceptado a propósito (sección 6).
+> - **Desempeño:** el Game Service usa `SETNX` de Redis como árbitro atómico en vez de un `if` en memoria — es lo único que garantiza `EC-02` aunque dos disparos lleguen a réplicas distintas. Es el único atributo que *empeora* en la meta (95%→90%), por la latencia de red entre servicios (~8ms→~35ms) — trade-off aceptado a propósito (sección 6). La caída es menor que con un diseño de más capas porque Domain Kernel no agrega overhead de puertos/adaptadores/inyección de dependencias.
 > - **Disponibilidad:** al desconectarse, el jugador queda marcado `conectado: false` sin ser retirado de la sala; si reconecta a tiempo, recupera el estado exacto (`EC-03`). Hoy 50% porque el Timer Master no tiene redundancia real si crashea el proceso; meta 85% con Timer Service independiente y failover <1.5s.
 > - **Seguridad:** cada conexión Socket.io pasa por un middleware que verifica el JWT antes de aceptar cualquier evento (`EC-04`). Se mantiene en 90%→90% porque ya estaba bien resuelta en el monolito — separar en microservicios no la mejora por sí sola.
 > - **Escalabilidad:** cada sala vive bajo su propia clave Redis (`sala:{codigo}`), sin fuga de eventos entre salas (`EC-06`). Hoy 60% porque el Timer Master es cuello de botella y el broadcast crece O(N²); meta 90% con cada servicio escalando de forma independiente.
 >
-> Trazabilidad completa: **KPI de negocio → historia de usuario → escenario de calidad → táctica arquitectónica → tecnología concreta.** Modificabilidad y Testeabilidad (no presentados como slide propia) son, de hecho, los que más mejoran (30%→100% y 60%→100%) — mencionar al cierre si el tiempo lo permite.
+> Trazabilidad completa: **KPI de negocio → historia de usuario → escenario de calidad → táctica arquitectónica → tecnología concreta.** Modificabilidad (60%→90%) y Testeabilidad (30%→95%) — no presentados como slide propia — son, de hecho, los que más mejoran gracias a Domain Kernel — mencionar al cierre si el tiempo lo permite.
 
 ---
 
@@ -176,22 +176,29 @@ Un escenario de calidad = requisito medible en 6 partes: Fuente, Estímulo, Arte
 | **Híbrida (adoptada)** | Empieza dentro del monolito, migra a procesos separados después, sin reescribir el dominio |
 
 > **Notas del orador:**
-> La decisión clave a defender: la híbrida **no exige separar procesos para dar sus beneficios**. El refactor hexagonal de `game/` es ejecutable dentro del Sprint 1 sin tocar el despliegue (`Proyecto.md §10`: "esto NO cambia el despliegue, todo sigue en un solo proceso"). Se gana testeabilidad y modificabilidad de inmediato; la separación física en microservicios queda como evolución post-MVP con un roadmap concreto, no una promesa vaga.
+> La decisión clave a defender: la híbrida **no exige separar procesos para dar sus beneficios**. El refactor a Domain Kernel de `game/` (separar dominio puro de los handlers que orquestan Redis) es ejecutable dentro del Sprint 1 sin tocar el despliegue (`Proyecto.md §10`: "esto NO cambia el despliegue, todo sigue en un solo proceso"). Se gana testeabilidad y modificabilidad de inmediato; la separación física en microservicios queda como evolución post-MVP con un roadmap concreto, no una promesa vaga.
 >
 > Detalle de la comparación: el monolito puro tiene cero latencia de red (~8ms/disparo) pero solo 30% de testeabilidad, y un servicio no crítico (Chat) puede arrastrar a uno crítico (Game) si comparten proceso. Los microservicios puros exigirían separar 7 procesos y resolver consistencia distribuida antes de tener el juego jugable — demasiado riesgo para el tiempo disponible.
 
 ### 4.3 Los tres paradigmas
 
-**a) Hexagonal (Puertos y Adaptadores)**
+**a) Domain Kernel (dominio puro + handlers delgados)**
 - El dominio del juego no importa Redis, ni Socket.io, ni Express
-- Puertos (interfaces) que los adaptadores implementan
+- Handlers delgados orquestan: leen Redis, llaman al dominio, escriben Redis
 - Se aplica en el **Game Service**
 
 ```javascript
-// DOMINIO — función pura
+// DOMINIO — función pura, sin imports de infraestructura
 function processShot(room, playerId, target, board) {
   if (room.turno.jugadorActual !== playerId) return { ok: false };
   return { ok: true, hit: board.shoot(target.x, target.y).hit };
+}
+
+// HANDLER — orquesta, sin lógica de negocio propia
+async function handleShot(event) {
+  const room = JSON.parse(await redis.get(`sala:${event.codigo}`));
+  const result = processShot(room, event.playerId, event, room.tableros[event.playerId]);
+  await redis.set(`sala:${event.codigo}`, JSON.stringify(room));
 }
 ```
 
@@ -205,13 +212,13 @@ function processShot(room, playerId, target, board) {
 - Se aplica como meta de despliegue post-MVP
 
 > **Notas del orador:**
-> **Hexagonal:** `processShot` se prueba con un objeto `room` cualquiera, en milisegundos, sin Redis ni red real — eso es lo que mide `EC-05` y la táctica de Testeabilidad "Control & monitor state". Es la única forma de cumplir Modificabilidad (agregar un poder sin tocar infraestructura) y Testeabilidad a la vez.
+> **Domain Kernel:** `processShot` se prueba con un objeto `room` cualquiera, en milisegundos, sin Redis ni red real — eso es lo que mide `EC-05` y la táctica de Testeabilidad "Control & monitor state". El handler (`handleShot`) es la única pieza que conoce Redis; agregar un poder nuevo significa un archivo de dominio + un handler, sin puertos ni adaptadores que mantener — más simple que Hexagonal clásico, al costo de que los handlers sí quedan acoplados a Redis (decisión aceptada porque Redis no va a cambiar, `Proyecto.md §5.4`).
 >
 > **Event-Driven:** ejemplo concreto — cuando Game Service publica `ShotFired`, lo consumen Observability y Bot Service sin que Game Service lo sepa. Si Bot Service se cae, Game Service sigue publicando con normalidad; la partida no se detiene. Regla explícita (`Proyecto.md §6.5`): "ningún servicio crítico depende de uno no crítico para funcionar". Caso ilustrativo corregido en esta sesión: el evento "crudo" `PlayerDisconnected` del Gateway (solo informa que el socket cayó) vs. el evento derivado `PlayerDisconnectedFromRoom` que publica Room Service tras decidir qué significa esa desconexión.
 >
 > **Microservicios:** no todos los servicios necesitan los mismos recursos — Game Service escala con partidas activas (250 partidas con 5 réplicas, `Proyecto.md §9.6`), Auth Service casi no necesita escalar. Separarlos evita escalar juntos cosas que no comparten necesidad.
 >
-> **Por qué los tres juntos y no por separado:** Event-Driven permite separar en Microservicios sin que un servicio conozca la dirección de red de otro. Hexagonal permite que, al separar el Game Service en su propio proceso, su dominio no se reescriba — solo se inyecta otro adaptador. Sin Event-Driven, Microservicios sería una maraña de HTTP síncrono frágil; sin Microservicios, Hexagonal seguiría dando testeabilidad pero no resolvería escalabilidad independiente. Conexión con la sección 3: Desempeño/Disponibilidad dependen del principio #2 (estado externo) y #4 (atomicidad); Seguridad depende del principio #5 (Gateway único); Escalabilidad depende directamente de Microservicios.
+> **Por qué los tres juntos y no por separado:** Event-Driven permite separar en Microservicios sin que un servicio conozca la dirección de red de otro. Domain Kernel permite que, al separar el Game Service en su propio proceso, su dominio (la lógica pura) no se reescriba — solo se reubica el handler que ya estaba aislado de los demás servicios. Sin Event-Driven, Microservicios sería una maraña de HTTP síncrono frágil; sin Microservicios, Domain Kernel seguiría dando testeabilidad pero no resolvería escalabilidad independiente. Conexión con la sección 3: Desempeño/Disponibilidad dependen del principio #2 (estado externo) y #4 (atomicidad); Seguridad depende del principio #5 (Gateway único); Escalabilidad depende directamente de Microservicios.
 
 ---
 
@@ -241,7 +248,7 @@ function processShot(room, playerId, target, board) {
 1. **Redis y Gateway son SPOF** — el cómputo se descentraliza en 7 servicios, pero el estado y el tráfico siguen centralizados.
    - Mitigación hoy: backups automáticos + reinicio automático
    - Mitigación futura: Redis Sentinel/Cluster + Gateway replicado
-2. **El desempeño empeora** — ~8ms (monolito) → ~40ms (híbrida), por latencia de red entre servicios. Aceptado a cambio de Testeabilidad y Modificabilidad. Sigue muy por debajo del umbral de 200ms.
+2. **El desempeño empeora** — ~8ms (monolito) → ~35ms (híbrida), por latencia de red entre servicios. Aceptado a cambio de Testeabilidad y Modificabilidad. Sigue muy por debajo del umbral de 200ms.
 
 > **Notas del orador:**
 > Presentar estas tensiones de forma proactiva es, en sí mismo, señal de madurez en arquitectura de software: ninguna decisión es gratuita, y reconocerlo con números (no con vaguedades del tipo "no tiene desventajas") es más convincente frente a un jurado.
@@ -253,12 +260,15 @@ function processShot(room, playerId, target, board) {
 | Diagrama | Slide |
 |----------|-------|
 | `01-arquitectura-tres-paradigmas.puml` | Cómo se combinan los 3 paradigmas |
-| `02-vision-general-arquitectura.puml` | Vista general: Cliente → Gateway → Servicios → Redis |
+| `02-vision-general-arquitectura.puml` | Vista general: Cliente → Gateway → Servicios → Redis, con el puerto/interfaz de cada servicio |
 | `03-tacticas-por-atributo-calidad.puml` | Atributo de calidad → táctica concreta |
 | `04-evolucion-monolito-a-microservicios.puml` | Antes / después / roadmap de 2 sprints |
+| `05-componentes-por-servicio.puml` | Detalle interno de cada microservicio, con su puerto/interfaz (diapositiva de respaldo) |
 
 > **Notas del orador:**
-> Estos 4 son versiones simplificadas para proyectar. Si el jurado pide más detalle técnico, los 14 diagramas completos están en `docs/diagramas/` (componentes de Game Service y Room Service, secuencia de la Salva, secuencia de desconexión/reconexión, máquinas de estado, mapa de eventos completo).
+> Estos 5 son versiones simplificadas para proyectar. Si el jurado pide más detalle técnico, los 14 diagramas completos están en `docs/diagramas/` (componentes de Game Service y Room Service, secuencia de la Salva, secuencia de desconexión/reconexión, máquinas de estado, mapa de eventos completo).
+>
+> Los diagramas 02 y 05 representan cada servicio con una **interfaz UML** (círculo) rotulada con su Puerto + Tecnología, tomados literalmente de `Proyecto.md §3`: Gateway `:443`, Auth `:3001`, Room `:3002`, Game `:3003` (expuesta solo por los Handlers, nunca por el dominio puro — refuerza Domain Kernel visualmente), Chat `:3004`. Timer y Observability no tienen interfaz, solo consumen del Broker. Al armar este diagrama se encontró una inconsistencia en `Proyecto.md §3.7`: el catálogo le asigna el puerto `3005` a Bot Service, pero el Gateway nunca lo enruta ahí — Bot solo actúa vía el evento `ShotFired` del Broker. Vale la pena mencionarlo si el jurado pregunta por qué Bot no tiene una interfaz activa en el diagrama.
 
 ---
 

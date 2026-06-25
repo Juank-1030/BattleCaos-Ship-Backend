@@ -1,6 +1,7 @@
 @startuml 02-vision-general-arquitectura
 
-title Visión General — Microservicios + Event-Driven + Hexagonal
+title Visión General — Microservicios + Event-Driven + Domain Kernel
+header Cada servicio expone su contrato como Puerto/Interfaz (Proyecto.md §3: columna "Puerto" + "Tecnología")
 
 !theme plain
 skinparam defaultFontName Consolas
@@ -30,6 +31,11 @@ skinparam package {
 skinparam rectangle {
   FontSize 12
 }
+skinparam interface {
+  BackgroundColor White
+  BorderColor #444444
+  FontSize 10
+}
 skinparam note {
   BackgroundColor LightYellow
   BorderColor Orange
@@ -39,51 +45,60 @@ skinparam ArrowFontSize 11
 
 actor "Jugador" as Jugador
 
+' --- Interfaz pública (la única que el cliente conoce) ---
+interface "**:443**\nHTTPS / WSS" as IGateway
+
 component "**Gateway**\núnico punto de entrada público" as Gateway #Wheat
+
+Jugador -down-> IGateway
+IGateway - Gateway
 
 package "①  MICROSERVICIOS — cada uno independiente y escalable por separado" as Micro {
 
+  ' --- Interfaces internas: una por servicio, según Proyecto.md §3 (Puerto + Tecnología) ---
+  interface "**:3001**\nHTTP" as IAuth
+  interface "**:3002**\nWS interno" as IRoom
+  interface "**:3003**\nWS interno" as IGame
+  interface "**:3004**\nWS interno" as IChat
+
   rectangle "Auth\nService" as Auth #LightGray
   rectangle "Room\nService" as Room #LightGray
-  rectangle "Timer\nService" as Timer #LightGray
+  rectangle "Timer\nService\n(sin puerto —\nsolo Redis Pub/Sub)" as Timer #LightGray
   rectangle "Chat\nService" as Chat #LightGray
-  rectangle "Bot\nService" as Bot #LightGray
+  rectangle "Bot\nService\n(sin interfaz activa —\nsolo consume eventos)" as Bot #LightGray
 
-  package "**Game Service** — ③ arquitectura hexagonal" as GameBox #LightYellow {
-    rectangle "**Infraestructura**\nadaptadores: Redis,\nSocket.io, broker" as Infra #LightBlue
-    rectangle "**Aplicación**\ncasos de uso\n(FireShotUseCase, ...)" as App #White
-    rectangle "**Dominio puro**\nGameEngine, Board, Fleet,\nPowers, Salvo — 0 dependencias" as Domain #LightGreen
+  Auth -- IAuth
+  Room -- IRoom
+  Chat -- IChat
 
-    Infra -down-> App : implementa\nlos puertos
-    App -down-> Domain : orquesta
+  package "**Game Service** — ③ Domain Kernel" as GameBox #LightYellow {
+    rectangle "**Handlers**\nhandleShot, handlePower, handleSalvo...\nleen/escriben Redis y publican eventos" as Handlers #LightBlue
+    rectangle "**Dominio puro**\nGameEngine, Board, Fleet,\nPowers, Salvo — 0 dependencias\n(sin interfaz: nunca se expone)" as Domain #LightGreen
+
+    Handlers -down-> Domain : llama funciones puras\n(orquesta, sin lógica propia)
+    Handlers -up- IGame
   }
 }
 
+Gateway ..> IAuth : verify(token)
+Gateway ..> IRoom : room:create / room:join
+Gateway ..> IGame : disparo / poder /\ncolocación / salva
+Gateway ..> IChat : chat:mensaje
+
 package "②  EVENT-DRIVEN — ningún servicio llama directamente a otro" as EventZone #Lavender {
   component "**Message Broker**\nRedis Pub/Sub" as Broker #LightGreen
-  component "Observability\n(solo consume eventos)" as Obs #LightGray
+  component "Observability\n(sin puerto — solo\nconsume eventos)" as Obs #LightGray
 
   Broker .down.> Obs : consume\n**todos** los eventos
 }
 
 database "**Redis State**\nestado · energía · locks\nKPIs · chat" as Redis
 
-' --- Comunicación síncrona (línea sólida): cliente -> sistema ---
-Jugador -down-> Gateway : WebSocket (Socket.io)
-Gateway -down-> Micro : reenvía cada evento\nal servicio correspondiente\n(síncrono)
-
 ' --- Comunicación asíncrona (línea punteada): el corazón del Event-Driven ---
 Micro .down.> Broker : **publish**(RoomReady,\nShotFired, PlayerDisconnectedFromRoom, ...)
 Broker .up.> Micro : **subscribe** — cada servicio solo\nrecibe los eventos que le importan
 
 Micro -[#blue]right-> Redis : leen / escriben\nestado compartido (síncrono)
-
-note left of Domain
-  El dominio NUNCA importa
-  Redis ni Socket.io: solo la
-  capa de Infraestructura
-  los conoce.
-end note
 
 note bottom of Redis
   Única fuente de verdad.
@@ -94,15 +109,24 @@ end note
 note right of Gateway
   Los servicios internos
   nunca se exponen
-  públicamente.
+  públicamente: solo
+  Gateway tiene el :443.
+end note
+
+note bottom of Bot
+  **Inconsistencia de Proyecto.md §3.7:**
+  el catálogo le asigna puerto 3005,
+  pero el Gateway nunca lo enruta —
+  Bot solo actúa vía Broker (ShotFired).
+  Se documenta sin interfaz activa.
 end note
 
 legend bottom center
   <b>①②③ — los tres paradigmas en este mismo diagrama:</b>
-  ① Microservicios: cada caja del paquete es desplegable y escalable por separado.
+  ① Microservicios: cada interfaz (:3001-:3004) es el contrato de un servicio independiente y escalable por separado.
   ② Event-Driven: flechas <b>punteadas</b> = publicación/suscripción asíncrona por el Broker (nunca una llamada directa entre servicios).
-  ③ Hexagonal: dentro de Game Service, Dominio → Aplicación → Infraestructura, sin que el dominio conozca la infraestructura.
-  Flechas <b>sólidas</b> = comunicación síncrona (cliente↔Gateway↔servicio, servicio↔Redis).
+  ③ Domain Kernel: dentro de Game Service, solo los Handlers exponen la interfaz :3003 — el Dominio puro no tiene ninguna interfaz, jamás se llama desde fuera.
+  Líneas con <b>círculo (-)</b> = interfaz provista. Flechas <b>punteadas a un círculo (..>)</b> = interfaz requerida/usada.
 end legend
 
 @enduml
