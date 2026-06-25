@@ -1,6 +1,6 @@
 # Proyecto — BattleCaos-Ship
 
-## Arquitectura Híbrida: Hexagonal + Event-Driven + Microservicios
+## Arquitectura Híbrida: Domain Kernel + Event-Driven + Microservicios
 
 ---
 
@@ -10,7 +10,7 @@
 2. [Arquitectura General](#2-arquitectura-general)
 3. [Catálogo de Microservicios](#3-catálogo-de-microservicios)
 4. [Tecnologías](#4-tecnologías)
-5. [Arquitectura Hexagonal en Game Service](#5-arquitectura-hexagonal-en-game-service)
+5. [Arquitectura Domain Kernel en Game Service](#5-arquitectura-domain-kernel-en-game-service)
 6. [Comunicación entre Servicios](#6-comunicación-entre-servicios)
 7. [Mapa de Eventos](#7-mapa-de-eventos)
 8. [Despliegue y Escalabilidad](#8-despliegue-y-escalabilidad)
@@ -36,7 +36,7 @@ Arquitectura **híbrida** que combina tres paradigmas:
 
 | Paradigma | Propósito |
 |-----------|-----------|
-| **Hexagonal** | El core del juego (reglas de negocio) es puro, sin dependencias de infraestructura |
+| **Domain Kernel** | El core del juego (reglas de negocio) es puro, sin dependencias de infraestructura. Los handlers orquestan llamando directamente a Redis y al dominio |
 | **Event-Driven** | Los servicios se comunican exclusivamente mediante eventos asíncronos |
 | **Microservicios** | Cada dominio (salas, juego, chat, bot, timer, auth, observabilidad) es un servicio independiente, desplegable y escalable por separado |
 
@@ -64,24 +64,23 @@ Arquitectura **híbrida** que combina tres paradigmas:
               │                 │   │   │   │   │                  │
      ┌────────▼──────┐  ┌──────▼───▼───▼───▼───▼───┐  ┌──────────▼──────┐
      │  Timer Service │  │     Game Service         │  │ Observability  │
-     │  (micro)       │  │     (hexagonal core)      │  │ (micro)        │
+     │  (micro)       │  │     (domain kernel)       │  │ (micro)        │
      │                │  │                           │  │                │
      │  Leader elect  │  │  Domain (puro):           │  │  Solo consume  │
      │  Timers reales │  │    GameEngine, Board,     │  │  eventos del   │
      │  Ticks Pub/Sub │  │    Fleet, Powers, Salvo,  │  │  broker        │
      │                │  │    Energy, Countermeasure │  │  KPIs y logs   │
      └────────────────┘  │                           │  └─────────────────┘
-                         │  Application (use cases): │
-                         │    FireShotUseCase,        │  ┌──────────────────┐
-                         │    UsePowerUseCase,        │  │  Bot Service     │
-                         │    PlaceShipsUseCase       │  │  (micro)         │
-                         │                           │  │                  │
-                         │  Adapters (infra):         │  │  IA del bot      │
-                         │    RedisStateAdapter,      │  │  Random/Minimax  │
-                         │    SocketIOBroadcastAdapter│  │  Decide disparos  │
-                         │    RedisEventPublisher,    │  └──────────────────┘
-                         │    RedisLockAdapter,       │
-                         │    TimerMasterAdapter      │  ┌──────────────────┐
+                          │  Handlers (orquestan):    │  ┌──────────────────┐
+                          │    handleShot,              │  │  Bot Service     │
+                          │    handlePower,             │  │  (micro)         │
+                          │    handleSalvo              │  │                  │
+                          │                            │  │  IA del bot      │
+                          │  Redis directo:             │  │  Random/Minimax  │
+                          │    redis.get/set,            │  │  Decide disparos  │
+                          │    redis.incrby,             │  └──────────────────┘
+                          │    redis.setnx               │
+                          │    redis.publish             │  ┌──────────────────┐
                          └───────────────────────────┘  │  Auth Service     │
               ┌──────────────────┐  ┌──────────────────┐│  (micro)          │
               │  Room Service    │  │  Chat Service    ││                   │
@@ -103,7 +102,7 @@ Arquitectura **híbrida** que combina tres paradigmas:
                                     └──────────────────┘
 ```
 
-> **⚠️ Nota sobre el alcance de este documento:** La arquitectura descrita aquí es la **visión destino** del proyecto. Varias piezas (separación en microservicios, hexagonal completa, Event Sourcing) están planificadas para Sprints futuros y no existen hoy en el código. El proyecto actual es un **monolito modular** funcional con 19 archivos. La sección [9.7](#97-resumen-de-cumplimiento--hoy-vs-meta) separa explícitamente lo que funciona hoy vs lo que es meta futura.
+> **⚠️ Nota sobre el alcance de este documento:** La arquitectura descrita aquí es la **visión destino** del proyecto. Varias piezas (separación en microservicios, Domain Kernel completo, Event Sourcing) están planificadas para Sprints futuros y no existen hoy en el código. El proyecto actual es un **monolito modular** funcional con 19 archivos. La sección [9.7](#97-resumen-de-cumplimiento--hoy-vs-meta) separa explícitamente lo que funciona hoy vs lo que es meta futura.
 >
 > **Tensión filosófica reconocida:** La arquitectura descentraliza el cómputo en 7 servicios independientes, pero centraliza el estado en un único Redis y el tráfico en un único Gateway. Esto crea 2 SPOFs que diluyen parcialmente la resiliencia ganada. Es una decisión deliberada: se prioriza simplicidad operativa y presupuesto $0 sobre disponibilidad absoluta. Para un proyecto académico con <100 jugadores simultáneos, es aceptable. Para producción, se mitigaría con Redis Sentinel/Cluster y Gateway redundante.
 
@@ -230,7 +229,7 @@ Arquitectura **híbrida** que combina tres paradigmas:
 - Publicar eventos de todo lo que ocurre en la partida
 - Broadcast de snapshots de estado a los clientes
 
-**Arquitectura hexagonal** (detalle en sección 5).
+**Arquitectura Domain Kernel** (detalle en sección 5).
 
 **Eventos que publica:**
 | Evento | Trigger | Payload |
@@ -427,16 +426,30 @@ Arquitectura **híbrida** que combina tres paradigmas:
 
 ---
 
-## 5. Arquitectura Hexagonal en Game Service
+## 5. Arquitectura Domain Kernel en Game Service
 
-El Game Service es el componente más crítico y donde se aplica la arquitectura hexagonal (Puertos y Adaptadores).
+El Game Service es el componente más crítico y donde se aplica la arquitectura **Domain Kernel**: handlers delgados que orquestan llamando directo a Redis y funciones de dominio puras.
 
-### 5.1 Estructura de carpetas
+### 5.1 Principio de capas
+
+```
+  REDIS (ioredis — llamado directo desde handlers)
+     ↑  lee/escribe
+     │
+  HANDLERS (handleShot, handlePower, handleSalvo...)
+     ↑  llaman
+     │
+  DOMAIN (engine, board, powers, salvo — funciones puras, 0 imports externos)
+```
+
+**El dominio es puro.** `engine.js` nunca importa `ioredis`, `socket.io` ni nada del `package.json`. Solo recibe datos y devuelve resultados. Los handlers son quienes orquestan: leen de Redis, llaman al dominio, escriben en Redis, publican eventos.
+
+### 5.2 Estructura de carpetas
 
 ```
 game/
-├── domain/                          # CAPA MÁS INTERNA — 0 dependencias externas
-│   ├── engine.js                    # GameEngine: orquestación de fases, disparos, poderes
+├── domain/                          # PURO — 0 dependencias externas
+│   ├── engine.js                    # GameEngine: fases, turnos, validaciones
 │   ├── board.js                     # Board: grid, placeShip, shoot, markShot, isShipSunk
 │   ├── fleet.js                     # Fleet: crear flota, verificar hundimiento
 │   ├── powers.js                    # Powers: validar y ejecutar poderes (5 tipos)
@@ -444,54 +457,20 @@ game/
 │   ├── salvo.js                     # Salvo: lógica de salva simultánea (pura)
 │   ├── countermeasure.js            # Countermeasure: ventana de reacción
 │   ├── player.js                    # Player: value object del jugador
-│   ├── ports/                       # PUERTOS (interfaces que define el dominio)
-│   │   ├── GameStatePort.js         #   getRoom / saveRoom / deleteRoom
-│   │   ├── LockPort.js             #   acquireLock / releaseLock
-│   │   ├── TimerPort.js            #   startTimer / stopTimer
-│   │   ├── EventPort.js            #   publish(event)
-│   │   └── BroadcastPort.js        #   broadcastState(room)
 │   └── errors.js                    # Errores del dominio (DomainError)
 │
-├── application/                     # CASOS DE USO
-│   ├── FireShotUseCase.js           # Orquesta: validar turno → disparar → energía → broadcast
-│   ├── UsePowerUseCase.js           # Orquesta: validar poder → aplicar → contramedida → broadcast
-│   ├── PlaceShipsUseCase.js         # Orquesta: validar flota → colocar → broadcast
-│   ├── StartGameUseCase.js          # Orquesta: RoomReady → iniciar timer → broadcast
-│   └── HandleDisconnectUseCase.js   # Orquesta: pausar timers → notificar
+├── handlers/                        # ORQUESTACIÓN — llaman Redis + domain
+│   ├── handleShot.js                # Recibe evento, lee Redis, llama processShot, escribe Redis, publica resultado
+│   ├── handlePower.js              # Recibe evento, lee Redis, llama applyPower, escribe Redis, publica resultado
+│   ├── handleSalvo.js              # Recibe evento, gestiona locks SETNX, llama resolveSalvo
+│   ├── handlePlaceShips.js         # Recibe evento, valida flota, guarda en Redis
+│   ├── handleDisconnect.js         # Recibe desconexión, pausa timers, notifica
+│   └── broker.js                   # Consume eventos de Redis Pub/Sub y los enruta al handler correspondiente
 │
-└── infrastructure/                  # ADAPTADORES (implementan los puertos)
-    ├── adapters/
-    │   ├── RedisStateAdapter.js     # GameStatePort → ioredis
-    │   ├── RedisLockAdapter.js      # LockPort → SETNX / DEL
-    │   ├── SocketIOBroadcastAdapter.js # BroadcastPort → io.to(room).emit()
-    │   ├── RedisEventPublisher.js   # EventPort → Redis Pub/Sub
-    │   └── TimerMasterAdapter.js    # TimerPort → Timer Service (via broker)
-    └── handlers/
-        ├── SocketHandlers.js        # Recibe eventos de Socket.io del Gateway
-        └── BrokerConsumer.js        # Consume eventos del Message Broker
+└── redis.js                         # Conexión compartida a Redis (ioredis)
 ```
 
-### 5.2 Principio de dependencias
-
-```
-  DOMAIN (GameEngine, Board, Fleet...)
-     ↑  conoce e importa
-     │
-  PORTS (interfaces abstractas)
-     ↑  implementa
-     │
-  ADAPTERS (RedisStateAdapter, SocketIOBroadcast...)
-     ↑  es llamado por
-     │
-  APPLICATION (FireShotUseCase...)
-     ↑  recibe eventos de
-     │
-  HANDLERS (SocketHandlers, BrokerConsumer)
-```
-
-**El dominio NO importa nada de infraestructura.** `engine.js` nunca hace `import redis from 'ioredis'`. Se comunica exclusivamente vía los puertos (interfaces).
-
-### 5.3 Ejemplo de flujo hexagonal
+### 5.3 Ejemplo de flujo Domain Kernel
 
 ```javascript
 // DOMAIN — puro
@@ -501,75 +480,162 @@ export function processShot(room, playerId, target, board) {
   if (room.turno.jugadorActual !== playerId) return { ok: false, error: 'no_es_tu_turno' };
   const result = board.shoot(target.x, target.y);
   if (!result.valid) return { ok: false, error: 'coordenada_invalida' };
-  return { ok: true, hit: result.hit, shipId: result.shipId };
+  return { ok: true, hit: result.hit, shipId: result.shipId, sunk: result.sunk };
 }
 
-// APPLICATION — orquesta puertos
-// FireShotUseCase.js
-export class FireShotUseCase {
-  constructor(statePort, lockPort, timerPort, eventPort, broadcastPort) {
-    this.state = statePort;
-    this.lock = lockPort;
-    this.timer = timerPort;
-    this.event = eventPort;
-    this.broadcast = broadcastPort;
+// HANDLER — orquesta, no contiene lógica de negocio
+// handleShot.js
+import redis from '../redis.js';
+import { processShot } from '../domain/engine.js';
+import { markHit, isShipSunk } from '../domain/board.js';
+import { addEnergy } from '../domain/energy.js';
+
+export async function handleShot(event) {
+  const room = JSON.parse(await redis.get(`sala:${event.codigo}`));
+  const board = room.tableros[event.playerId];
+  const result = processShot(room, event.playerId, { x: event.x, y: event.y }, board);
+
+  if (!result.ok) {
+    await redis.publish('game:resultado', JSON.stringify({ ok: false, error: result.error }));
+    return;
   }
 
-  async execute(codigo, playerId, target) {
-    const room = await this.state.getRoom(codigo);
-    const board = room.tableros[playerId];
-    const result = processShot(room, playerId, target, board);
-
-    if (!result.ok) return result;
-
-    board.markShot(target.x, target.y);
-    if (result.hit) {
-      room.energia[room.turno.equipoActual] += 1;
+  markHit(board, event.x, event.y, result.hit);
+  if (result.hit) {
+    addEnergy(room, room.turno.equipoActual, 1);
+    if (result.sunk) {
+      addEnergy(room, room.turno.equipoActual, 3);
     }
-    await this.state.saveRoom(room);
-    await this.event.publish('ShotFired', { codigo, playerId, ...target, result: result.hit });
-    await this.broadcast.broadcastState(room);
-    return result;
   }
+
+  await redis.set(`sala:${event.codigo}`, JSON.stringify(room));
+  await redis.publish('game:resultado', JSON.stringify({
+    codigo: event.codigo, playerId: event.playerId,
+    x: event.x, y: event.y, hit: result.hit, sunk: result.sunk
+  }));
 }
-
-// INFRASTRUCTURE — adaptador concreto
-// RedisStateAdapter.js
-export class RedisStateAdapter {
-  constructor(redis) { this.redis = redis; }
-  async getRoom(code) {
-    const data = await this.redis.get(`sala:${code}`);
-    return data ? JSON.parse(data) : null;
-  }
-  async saveRoom(room) {
-    await this.redis.set(`sala:${room.codigo}`, JSON.stringify(room));
-  }
-}
-
-// HANDLERS — inyección de dependencias
-// SocketHandlers.js
-const statePort = new RedisStateAdapter(redis);
-const lockPort = new RedisLockAdapter(redis);
-const timerPort = new TimerMasterAdapter(broker);
-const eventPort = new RedisEventPublisher(broker);
-const broadcastPort = new SocketIOBroadcastAdapter(io);
-
-const fireShot = new FireShotUseCase(statePort, lockPort, timerPort, eventPort, broadcastPort);
-
-socket.on('disparo:realizar', async ({ x, y }, ack) => {
-  const result = await fireShot.execute(socket.roomCode, socket.playerId, { x, y });
-  ack(result);
-});
 ```
 
-### 5.4 Ventajas de la hexagonal
+### 5.4 Ventajas del Domain Kernel
 
-| Aspecto | Antes (monolito) | Después (hexagonal) |
-|---------|------------------|---------------------|
-| Testing | Pruebas requieren Redis corriendo | Pruebas con mocks: `new MockStatePort()` |
-| Cambio de BD | Cambiar Redis por PostgreSQL = reescribir game/* entero | Solo crear `PostgresStateAdapter` |
-| Cambio de transporte | Socket.io a WS nativo = reescribir handlers | Solo crear `NativeWSBroadcastAdapter` |
-| Claridad del dominio | Lógica mezclada con redis.get/set | `processShot()` es una función pura que solo recibe datos |
+| Aspecto | Hexagonal (plan original) | Domain Kernel (propuesta) |
+|---------|--------------------------|---------------------------|
+| Archivos por operación | ~5 (domain + port + adapter + use case + handler) | ~2 (domain + handler) |
+| Flujo para entender | Handler → UseCase → Port → Adapter → Domain → Adapter | Handler → Redis → Domain → Redis (lineal) |
+| Curva de aprendizaje | Alta (DI, puertos, inversión de dependencias) | Baja (funciones + Redis directo) |
+| Tests de dominio | ✅ Puros (igual) | ✅ Puros (igual) |
+| Tests de integración | Mockear N interfaces | Usar `ioredis-mock` (1 línea) |
+| Cambiar Redis por X | ✅ Solo adapter nuevo | ❌ Tocar handlers (cambio mecánico, no lógico) |
+| Velocidad de agregar features | ~1h por poder nuevo | ~15min por poder nuevo |
+
+> **Decisión:** Se prioriza velocidad de desarrollo y simplicidad sobre el aislamiento de infraestructura. Redis no va a cambiar (ver §4.4), por lo que el acoplamiento handlers-Redis es aceptable. El dominio crítico sigue siendo puro y testeable.
+
+### 5.5 Extensibilidad
+
+La arquitectura Domain Kernel + Event-Driven + Microservicios hace que el proyecto sea extensible en 3 dimensiones:
+
+#### 5.5.1 Extender la lógica del juego (nuevos poderes, armas, fases)
+
+Cada nueva mecánica sigue el mismo patrón de **2 archivos**, sin modificar nada existente:
+
+```
+1. game/domain/miPoder.js     → función pura (valida, ejecuta, calcula)
+2. game/handlers/miPoder.js   → orquesta: lee Redis, llama dominio, escribe Redis
+3. game/handlers/broker.js    → 1 línea: registrar el evento
+```
+
+**Ejemplo concreto — agregar "Torpedo":**
+
+```javascript
+// 1. domain/torpedo.js — puro, testeable sin infraestructura
+export function validateTorpedo(room, playerId) {
+  if (room.fase !== 'TURNOS') return { ok: false, error: 'fase_incorrecta' };
+  if (room.torpedosRestantes?.[playerId] <= 0) return { ok: false, error: 'sin_torpedos' };
+  return { ok: true };
+}
+
+export function applyTorpedo(board, x, y) {
+  // Impacto en 3x3 alrededor de (x, y)
+  const hits = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const result = board.shoot(x + dx, y + dy);
+      if (result.hit) hits.push({ x: x + dx, y: y + dy, shipId: result.shipId });
+    }
+  }
+  return { hits };
+}
+
+// 2. handlers/handleTorpedo.js — orquesta, sin lógica de negocio
+import redis from '../redis.js';
+import { validateTorpedo, applyTorpedo } from '../domain/torpedo.js';
+
+export async function handleTorpedo(event) {
+  const room = JSON.parse(await redis.get(`sala:${event.codigo}`));
+  const validation = validateTorpedo(room, event.playerId);
+  if (!validation.ok) return redis.publish('game:resultado', JSON.stringify(validation));
+
+  const board = room.tableros[event.playerId];
+  const result = applyTorpedo(board, event.x, event.y);
+  room.torpedosRestantes[event.playerId]--;
+
+  await redis.set(`sala:${event.codigo}`, JSON.stringify(room));
+  await redis.publish('game:resultado', JSON.stringify({ codigo: event.codigo, ...result }));
+}
+
+// 3. broker.js — 1 línea
+const handlers = {
+  'torpedo:lanzar': handleTorpedo,  // ← única línea nueva
+  // ... resto de handlers existentes
+};
+```
+
+**Lo que NO se toca:** engine.js, board.js, ningún otro handler, ningún otro servicio, el Gateway, la comunicación entre servicios, el despliegue.
+
+#### 5.5.2 Extender con nuevos servicios
+
+Cada servicio nuevo es **independiente, desplegable y escalable por separado**. Solo necesita conectarse a Redis Pub/Sub y escuchar los eventos que le interesan:
+
+| Nuevo servicio | Eventos que escucha | ¿Afecta al juego? |
+|---|---|---|
+| **Rankings** | `GameEnded`, `ShotFired` | ❌ No, juego sigue si se cae |
+| **Replays** | Todos los eventos de sala | ❌ No, juego sigue si se cae |
+| **Anti-cheat** | `ShotFired`, `PowerUsed` | ❌ No, solo alerta |
+| **Notificaciones push** | `PhaseChanged`, `TimerTick` | ❌ No, son externas |
+
+**Para crear un servicio nuevo:**
+
+```
+1. Crear carpeta: services/rankings/
+2. Conectarse a Redis: const redis = createClient(process.env.REDIS_URL)
+3. Suscribirse a eventos: redis.subscribe('game:resultado', handleGameEnd)
+4. Procesar y guardar: redis.incrby('rankings:jugador:x', puntos)
+5. Desplegar como servicio independiente en Render/Railway
+```
+
+**El servicio nuevo nunca toca el código de Game, Chat, Gateway ni ningún otro servicio.**
+
+#### 5.5.3 Extender el Gateway (nuevos eventos del cliente)
+
+El Gateway es un mapa plano de eventos Socket.io a canales de Redis:
+
+```javascript
+// Gateway — enrutamiento plano
+socket.on('disparo:realizar', (data) => redis.publish('game:accion', { tipo: 'disparo', ...data }));
+socket.on('torpedo:lanzar', (data) => redis.publish('game:accion', { tipo: 'torpedo', ...data })); // ← 1 línea
+socket.on('chat:mensaje', (data) => redis.publish('chat:accion', data));
+```
+
+Agregar un nuevo evento de cliente es una línea. No hay lógica que validar aquí, solo enrutar.
+
+#### 5.5.4 Resumen de extensibilidad
+
+| Qué quieres agregar | Archivos a crear | Archivos a modificar | Tiempo estimado |
+|---|---|---|---|
+| Nuevo poder/arma | 2 (`domain/` + `handlers/`) | 1 (`broker.js` + 1 línea) | ~20-30 min |
+| Nuevo servicio | 1 carpeta nueva | 0 | ~1-2h |
+| Nuevo evento de cliente | 0 | 1 (Gateway, 1 línea) | ~5 min |
+| Nueva fase de juego | 1 (`domain/`) | 1 (`handlers/`) | ~30 min |
 
 ---
 
@@ -590,7 +656,6 @@ Broker → Servicio C: consume(EventoX)
 | Tipo | Protocolo | Uso |
 |------|-----------|-----|
 | Cliente → Gateway | WebSocket (Socket.io) | Todas las interacciones de juego |
-| Gateway → Servicios internos | WebSocket (Socket.io interno) | Reenvío de eventos de cliente |
 | Gateway → Auth Service | HTTP | Verificación de JWT (síncrono, cacheable) |
 | Servicios ↔ Broker | Redis Pub/Sub | Eventos asíncronos entre servicios |
 
@@ -862,9 +927,9 @@ A continuación se evalúa la arquitectura híbrida contra cada atributo de cali
 |------------------------|----------------|
 | **Split Module** | El monolito de 19 archivos se divide en 7 microservicios. Cada servicio es un módulo pequeño y con una responsabilidad única. |
 | **Increase Semantic Coherence** | Cada microservicio cubre UN bounded context: Room, Game, Chat, Bot, Timer, Auth, Observability. Sin responsabilidades mezcladas. |
-| **Encapsulate** | Hexagonal: el dominio del Game Service no expone sus internos. Los adaptadores son intercambiables sin afectar la lógica de negocio. |
+| **Encapsulate** | Domain Kernel: el dominio del Game Service es puro y no expone sus internos. Los handlers son la única capa que conoce Redis, el dominio nunca. |
 | **Use an Intermediary** | El Message Broker es el intermediario entre servicios. Room Service nunca llama directo a Game Service; publica `RoomReady` y Game Service reacciona. |
-| **Restrict Dependencies** | El dominio de Game Service tiene **0 dependencias externas**. No importa `ioredis`, `socket.io`, `express` ni ningún paquete del `package.json`. Solo Node.js puro. |
+| **Restrict Dependencies** | El dominio de Game Service tiene **0 dependencias externas**. No importa `ioredis`, `socket.io`, `express` ni ningún paquete del `package.json`. Solo Node.js puro. Los handlers son la única capa con acceso a Redis. |
 | **Abstract Common Services** | Gateway abstrae autenticación, rate limiting y enrutamiento. Auth Service abstrae la lógica de JWT/Google OAuth. |
 
 **Escenario del documento:**
@@ -878,10 +943,10 @@ A continuación se evalúa la arquitectura híbrida contra cada atributo de cali
 **Ejemplo concreto:** Agregar un nuevo poder "Torpedo" requiere:
 1. Definir `Torpedo` en `game/domain/powers.js` (30 min)
 2. Escribir tests unitarios sin infraestructura (30 min)
-3. Crear adaptador si necesita nueva lógica de Redis (opcional, 15 min)
+3. Agregar caso en `handlers/handlePower.js` (10 min)
 4. Desplegar solo Game Service (5 min)
 
-**Total: ~1.5 horas.** En el monolito actual requeriría tocar `game/powers.js`, `game/index.js`, y probar con Redis corriendo.
+**Total: ~1h 15min.** Sin necesidad de crear puertos, adaptadores ni use cases.
 
 ---
 
@@ -960,9 +1025,9 @@ El servidor autoritativo previene modificación directa: los clientes solo enví
 
 | Táctica (del documento) | Implementación |
 |------------------------|----------------|
-| **Control & monitor state** | Hexagonal: el dominio expone puertos (interfaces) que se pueden mockear. Se inyecta `MockStatePort` para aislar el dominio en pruebas. |
+| **Control & monitor state** | Domain Kernel: el dominio es puro y se prueba sin infraestructura. Los handlers se prueban con `ioredis-mock` (Redis en memoria) o tests de integración con Redis real. |
 | **Execute test suite** | Cada microservicio tiene su propio test suite. El dominio del Game Service se prueba sin Redis ni Socket.io. |
-| **Component interface for controlling behavior** | Los puertos hexagonales son interfaces explícitas. `FireShotUseCase` recibe `GameStatePort`, `LockPort`, `TimerPort`, etc. — todos mockeables. |
+| **Component interface for controlling behavior** | Las funciones del dominio son puras y reciben datos planos. Los handlers se pueden probar con una conexión Redis mockeada (`ioredis-mock`) o real. |
 | **Capture cause of fault** | Los eventos del broker tienen `correlationId` para trazar el flujo completo de una operación. |
 | **Boundary testing** | Las funciones del dominio (`processShot`, `validatePower`, `checkSink`) reciben datos planos y devuelven resultados planos. Sin side effects. |
 
@@ -1000,7 +1065,7 @@ describe('GameEngine — processShot', () => {
 });
 ```
 
-**Cobertura esperada:** 85%+ en el dominio del Game Service (todo el código puro). 60-70% en los adaptadores (requieren Redis/Socket.io mockeados o testcontainers).
+**Cobertura esperada:** 85%+ en el dominio del Game Service (todo el código puro). 60-70% en los handlers (requieren ioredis-mock o Redis real para integración).
 
 ---
 
@@ -1040,10 +1105,10 @@ describe('GameEngine — processShot', () => {
 | Atributo | Hoy (monolito actual) | Meta (arquitectura híbrida) | Brechas |
 |--------------------|:---:|:---:|---------|
 | **Disponibilidad** | ❌ (50%) Timer Master en mismo proceso. Si crashea, no hay timers. Sin redundancia real. | ✅✅ (85%) Timer Service independiente con failover. Heartbeat en todos los servicios. Redis externo. | Gateway y Redis son SPOF. Redis Sentinel es (futuro). Rollback total requiere Event Sourcing (futuro). |
-| **Modificabilidad** | ⚠️ (60%) Módulos separados por carpeta, pero game/* importa Redis directamente. No hay puertos/adaptadores. | ✅✅✅ (100%) Hexagonal + Event-Driven + Microservicios cubren todas las tácticas. | Ninguna. La hexagonal es implementable desde el Sprint 1 sin cambiar infraestructura. |
-| **Desempeño** | ✅✅ (95%) Todo en un proceso. Sin latencia de red entre módulos. ~8ms por disparo. | ✅ (80%) Latencia estimada ~40ms por disparo (cruza Gateway + Broker). Aumenta ~5x vs monolito. | Mayor latencia es el costo de la descomposición. Priorización de eventos (RabbitMQ) es (futuro). |
+| **Modificabilidad** | ⚠️ (60%) Módulos separados por carpeta, pero game/* importa Redis directamente. No hay puertos/adaptadores. | ✅✅ (90%) Domain Kernel + Event-Driven + Microservicios. Dominio puro, handlers acoplados a Redis (aceptado). | Se pierde aislamiento total de infraestructura a cambio de simplicidad. Redis no cambiará. |
+| **Desempeño** | ✅✅ (95%) Todo en un proceso. Sin latencia de red entre módulos. ~8ms por disparo. | ✅✅ (90%) Latencia estimada ~35ms por disparo (cruza Gateway + Broker). Sin overhead de capas de abstracción (puertos, adaptadores, inyección). | Mayor latencia es el costo de la descomposición. Domain Kernel reduce overhead al eliminar capas intermedias (~5ms menos por operación). |
 | **Seguridad** | ✅✅ (90%) JWT en cada conexión. Auth module en el mismo proceso. Sin exposición de servicios. | ✅✅ (90%) Gateway centraliza autenticación. Servicios aislados. Audit trail completo. | HMAC en mensajes del broker es (futuro). |
-| **Testeabilidad** | ❌ (30%) No se puede probar game/salvo.js sin Redis. No hay mocks ni puertos. | ✅✅✅ (100%) Dominio puro hexagonal. Puertos mockeables. Tests unitarios sin infraestructura. | Ninguna. Se puede empezar a implementar hoy sin cambiar el despliegue. |
+| **Testeabilidad** | ❌ (30%) No se puede probar game/salvo.js sin Redis. No hay mocks ni puertos. | ✅✅ (95%) Dominio puro testeable sin infraestructura. Handlers requieren ioredis-mock o Redis real para integración. | Los handlers necesitan mock/infraestructura para pruebas, pero el dominio (90% de la lógica) se prueba sin nada. |
 | **Escalabilidad** | ⚠️ (60%) Timer Master es cuello de botella (1 líder). Escala replicando, pero broadcast crece O(N²). | ✅✅ (90%) Cada servicio escala independientemente. Timer Service elimina cuello de botella. | Redis sigue siendo el límite real (Upstash plan gratuito: 10K cmd/día). Para 500+ partidas se necesita plan pago. |
 
 ---
@@ -1073,15 +1138,16 @@ server/
 ├── rooms/               ← Crear/unir salas (ya existe)
 ├── state/               ← Estado en Redis (ya existe)
 ├── game/
-│   ├── engine.js        ← Motor de fases (ya existe)
-│   ├── board.js         ← Tablero (ya existe)
-│   ├── fleet.js         ← Flota (ya existe)
-│   ├── powers.js        ← Energía + poderes (ya existe)
-│   ├── salvo.js         ← Lógica de salva (ya existe)
-│   ├── countermeasure.js ← Ventana de reacción (ya existe)
-│   └── index.js         ← Handlers (hoy VACÍOS — completar en Sprint 1)
-│       └── socket.on('colocacion:set')     → DOMH06
-│       └── socket.on('disparo:realizar')   → DOMH08
+│   ├── domain/          ← Lógica pura (ya existe: engine, board, fleet, powers, salvo, countermeasure)
+│   │   ├── engine.js
+│   │   ├── board.js
+│   │   ├── fleet.js
+│   │   ├── powers.js
+│   │   ├── salvo.js
+│   │   └── countermeasure.js
+│   └── handlers/        ← Orquestación (hoy VACÍOS — completar en Sprint 1)
+│       ├── handlePlaceShips.js   → DOMH06
+│       └── handleShot.js        → DOMH08
 ├── timer/master.js      ← Timer Master (ya existe)
 ├── chat/                ← Chat (ya existe)
 ├── bot/                 ← Bot básico (ya existe)
@@ -1089,9 +1155,9 @@ server/
 └── index.js             ← Entry point (ya existe)
 ```
 
-**Refactor hexagonal (opcional, dentro del mismo Sprint 1):**
+**Estructura Domain Kernel desde Sprint 1:**
 
-Si el equipo opta por aplicarlo, se refactoriza solo `game/` para que el dominio sea puro:
+El dominio se organiza desde el inicio con Domain Kernel:
 
 ```
 game/
@@ -1102,13 +1168,14 @@ game/
 │   ├── powers.js
 │   ├── energy.js
 │   ├── salvo.js
-│   ├── countermeasure.js
-│   └── ports/           ← interfaces (GameStatePort, LockPort, etc.)
-├── application/         ← casos de uso (FireShotUseCase, etc.)
-└── infrastructure/      ← adaptadores (RedisStateAdapter, etc.)
+│   └── countermeasure.js
+└── handlers/            ← orquestan: leen Redis, llaman domain, escriben Redis
+    ├── handleShot.js
+    ├── handlePower.js
+    ├── handleSalvo.js
+    ├── handlePlaceShips.js
+    └── broker.js
 ```
-
-Esto NO cambia el despliegue: todo sigue en un solo proceso. Solo mejora la testabilidad y mantenibilidad del código.
 
 ---
 
@@ -1125,10 +1192,10 @@ Esto NO cambia el despliegue: todo sigue en un solo proceso. Solo mejora la test
 ```
 server/
 ├── game/
-│   └── index.js         ← Completar handlers RESTANTES:
-│       └── socket.on('salva:disparo')        → DOMH12
-│       └── socket.on('poder:usar')           → DOMH10
-│       └── socket.on('contramedida:activar')  → DOMH11
+│   └── handlers/        ← Completar handlers RESTANTES:
+│       └── handleSalvo.js  ('salva:disparo')        → DOMH12
+│       └── handlePower.js  ('poder:usar')           → DOMH10
+│       └── handleCM.js     ('contramedida:activar')  → DOMH11
 ├── observability/       ← KPIs + métricas (ya existe, completar DOMH14)
 ├── timer/master.js      ← Timeouts de turno (conectar DOMH15)
 └── bot/                 ← Mejorar IA con búsqueda de adyacentes (DOMF1101)
@@ -1159,9 +1226,9 @@ Esto NO es necesario para el MVP. Se incluye como documentación de visibilidad 
  │ DOCH01-DOCH03               │              │ DOCH04-DOCH05               │
  │                             │              │                             │
  │ [server]                    │              │ [server]                    │
- │  auth/        ✅            │              │  game/index.js  (poderes)   │
- │  rooms/       ✅            │              │  game/index.js  (salva)     │
- │  state/       ✅            │              │  game/index.js  (CM)        │
+ │  auth/        ✅            │              │  game/handlers/ (poderes)   │
+ │  rooms/       ✅            │              │  game/handlers/ (salva)     │
+ │  state/       ✅            │              │  game/handlers/ (CM)        │
  │  game/engine  ✅            │              │  observability/ (KPIs)      │
  │  game/board   ✅            │              │  timer/        (timeouts)   │
  │  game/fleet   ✅            │              │  bot/          (IA básica)  │
@@ -1174,8 +1241,8 @@ Esto NO es necesario para el MVP. Se incluye como documentación de visibilidad 
  │  events/      ✅            │              DESPLIEGUE (ambos sprints):
  │                             │              ┌─────────────────────────┐
  │ [PENDIENTES]                │              │ 1 Web Service (Render)  │
- │  game/index.js handlers     │              │ 1 Redis (Upstash)      │
- │  (colocacion + disparos)    │              │ Ambos gratis            │
+ │  game/handlers/ (colocacion + disparos) │              │ 1 Redis (Upstash)      │
+ │                              │              │ Ambos gratis            │
  │  rooms/reconexión           │              └─────────────────────────┘
  └─────────────────────────────┘
 ```

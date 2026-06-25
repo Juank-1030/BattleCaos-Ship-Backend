@@ -1346,7 +1346,7 @@ No todas las historias requieren un escenario de calidad propio: solo se documen
 
 **Valor:** el negocio depende de poder añadir mecánicas nuevas (poderes) sin arriesgar el resto del motor; sin este escenario, DOMH10 podría crecer como un módulo rígido y costoso de extender.
 
-**Estado de cumplimiento:** esta medida (máx. 2 archivos, <3h) es la meta de la arquitectura propuesta en `Proyecto.md`, alcanzable una vez se separe el dominio puro de poderes de su infraestructura (Sprint 1 del roadmap de migración). Hoy el módulo de poderes todavía mezcla la regla de negocio con el acceso al almacenamiento de estado en el mismo archivo, así que la medida aún no se cumple — este escenario sirve como criterio de aceptación de esa migración, no como verificación del código actual.
+**Estado de cumplimiento:** esta medida (máx. 2 archivos, <3h) es la meta de la arquitectura propuesta en `Proyecto.md`, alcanzable separando el dominio puro de poderes (lógica) de su orquestación (lectura/escritura de estado) — hoy el módulo de poderes todavía mezcla ambas cosas en el mismo archivo, así que la medida aún no se cumple en el código actual. La separación que lo resuelve es deliberadamente simple (un archivo de dominio puro + un archivo que orquesta la lectura/escritura del estado, sin capas intermedias adicionales), por lo que se estima alcanzable en menos tiempo del que tomaría con un esquema de más capas — este escenario sirve como criterio de aceptación de ese trabajo, no como verificación del código actual.
 
 ---
 
@@ -1368,7 +1368,7 @@ No todas las historias requieren un escenario de calidad propio: solo se documen
 <a id="escalabilidad-horizontal"></a>
 ## Escalabilidad Horizontal
 
-La arquitectura oficial del proyecto es la híbrida (Hexagonal + Event-Driven + Microservicios) descrita en `Proyecto.md`: el dominio del juego queda aislado de la infraestructura, los servicios se comunican por eventos, y cada dominio (salas, juego, chat, bot, timer, auth, observabilidad) escala de forma independiente. `docs/ESCALABILIDAD.md` y `docs/TIMER_MASTER.md` documentan el mecanismo de elección de líder (`Timer Master`) que esa arquitectura reutiliza dentro del Timer Service para coordinar los temporizadores entre réplicas, sin que ningún temporizador se duplique ni se pierda. Para el MVP de este documento, la migración completa se trata como trabajo de documentación y como un roadmap incremental (DOCF401, ver el roadmap de migración de `Proyecto.md`), no como una historia de desarrollo bloqueante.
+La arquitectura oficial del proyecto es la híbrida (Domain Kernel + Event-Driven + Microservicios) descrita en `Proyecto.md`: el dominio del juego (las reglas puras) queda aislado de la infraestructura, los servicios se comunican por eventos, y cada dominio (salas, juego, chat, bot, timer, auth, observabilidad) escala de forma independiente. `docs/ESCALABILIDAD.md` y `docs/TIMER_MASTER.md` documentan el mecanismo de elección de líder (`Timer Master`) que esa arquitectura reutiliza dentro del Timer Service para coordinar los temporizadores entre réplicas, sin que ningún temporizador se duplique ni se pierda. Para el MVP de este documento, la migración completa se trata como trabajo de documentación y como un roadmap incremental (DOCF401, ver el roadmap de migración de `Proyecto.md`), no como una historia de desarrollo bloqueante.
 
 ---
 

@@ -1,6 +1,7 @@
 @startuml 05-componentes-por-servicio
 
-title Componentes Internos de Cada Microservicio
+title Componentes Internos de Cada Microservicio — con Puerto/Interfaz
+header Puerto + Tecnología tomados literalmente de Proyecto.md §3 (catálogo de microservicios)
 
 !theme plain
 skinparam defaultFontName Consolas
@@ -30,6 +31,11 @@ skinparam package {
 skinparam rectangle {
   FontSize 11
 }
+skinparam interface {
+  BackgroundColor White
+  BorderColor #444444
+  FontSize 9
+}
 skinparam note {
   BackgroundColor LightYellow
   BorderColor Orange
@@ -39,22 +45,30 @@ skinparam ArrowFontSize 10
 
 actor "Jugador" as Jugador
 
+interface "**:443**\nHTTPS/WSS" as IGateway
 component "**Gateway**\nExpress + Socket.io\nAuth middleware · Rate limiting\nEnrutamiento · GET /health" as Gateway #Wheat
 
-' ===================== FILA 1: servicios simples =====================
+Jugador -down-> IGateway
+IGateway - Gateway
+
+' ===================== FILA 1: servicios simples, cada uno con su interfaz =====================
 together {
+  interface "**:3001**\nHTTP" as IAuth
   package "Auth Service" as AuthBox #LightCyan {
     rectangle "Middleware\nverify(JWT)" as Auth1
     rectangle "createToken()\nGoogle OAuth → JWT" as Auth2
   }
+  AuthBox -- IAuth
 
+  interface "**:3002**\nWS interno" as IRoom
   package "Room Service" as RoomBox #LightCyan {
     rectangle "createRoom / joinRoom\ncódigo único, cupo, equipos" as Room1
     rectangle "markDisconnected /\nmarkReconnected\nconectado: true|false" as Room2
     rectangle "checkRoomLifecycle\ndestruye solo si\nnadie queda conectado" as Room3
   }
+  RoomBox -- IRoom
 
-  package "Timer Service" as TimerBox #LightCyan {
+  package "Timer Service\n(sin puerto — solo Redis Pub/Sub)" as TimerBox #LightCyan {
     rectangle "Leader election\nSET NX EX + heartbeat 500ms" as Timer1
     rectangle "startTimer / stopTimer\nCOLOCACION · TURNO\nSALVA · CONTRAMEDIDA" as Timer2
     rectangle "Tick broadcaster\ncada 100ms" as Timer3
@@ -63,41 +77,39 @@ together {
 
 ' ===================== FILA 2: servicios no críticos =====================
 together {
+  interface "**:3004**\nWS interno" as IChat
   package "Chat Service" as ChatBox #LightCyan {
     rectangle "recibe chat:mensaje\nrutea equipo/global" as Chat1
     rectangle "persiste últimos\n100 mensajes" as Chat2
   }
+  ChatBox -- IChat
 
-  package "Bot Service" as BotBox #LightCyan {
+  package "Bot Service\n(:3005 en el catálogo, pero\nsin interfaz activa — ver nota)" as BotBox #LightCyan {
     rectangle "escucha ShotFired\n(modo 1v1-bot)" as Bot1
     rectangle "decide disparo\n(hoy random)" as Bot2
   }
 
-  package "Observability Service" as ObsBox #LightCyan {
+  package "Observability Service\n(sin puerto)" as ObsBox #LightCyan {
     rectangle "consume TODOS\nlos eventos (*)" as Obs1
     rectangle "calcula KPIs\nlatencia, % reconexión,\n% partidas completadas" as Obs2
   }
 }
 
-' ===================== Game Service — el más complejo (hexagonal) =====================
-package "**Game Service** — arquitectura hexagonal" as GameBox #LightYellow {
+' ===================== Game Service — el más complejo (Domain Kernel) =====================
+interface "**:3003**\nWS interno" as IGame
 
-  package "Infraestructura (adaptadores)" as Infra #LightBlue {
-    rectangle "RedisStateAdapter" as IA1
-    rectangle "RedisLockAdapter" as IA2
-    rectangle "SocketIOBroadcastAdapter" as IA3
-    rectangle "RedisEventPublisher" as IA4
-    rectangle "TimerMasterAdapter" as IA5
+package "**Game Service** — Domain Kernel" as GameBox #LightYellow {
+
+  package "Handlers (orquestación — leen/escriben Redis directo)" as Handlers #LightBlue {
+    rectangle "handleShot.js" as H1
+    rectangle "handlePower.js" as H2
+    rectangle "handleSalvo.js\n(SETNX por casilla)" as H3
+    rectangle "handlePlaceShips.js" as H4
+    rectangle "handleDisconnect.js /\nhandleReconnect.js" as H5
+    rectangle "broker.js\n(enruta eventos del Pub/Sub)" as H6
   }
 
-  package "Aplicación (casos de uso)" as App #White {
-    rectangle "FireShotUseCase" as UC1
-    rectangle "UsePowerUseCase" as UC2
-    rectangle "PlaceShipsUseCase" as UC3
-    rectangle "HandleDisconnectUseCase /\nHandleReconnectUseCase" as UC4
-  }
-
-  package "Dominio puro (0 dependencias)" as Domain #LightGreen {
+  package "Dominio puro (0 dependencias, sin interfaz propia)" as Domain #LightGreen {
     rectangle "GameEngine" as D1
     rectangle "Board · Fleet" as D2
     rectangle "Powers · Energy" as D3
@@ -105,19 +117,18 @@ package "**Game Service** — arquitectura hexagonal" as GameBox #LightYellow {
     rectangle "Countermeasure" as D5
   }
 
-  Infra -down-> App : implementa\nlos puertos
-  App -down-> Domain : orquesta
+  Handlers -down-> Domain : llaman funciones puras\n(sin lógica de negocio propia)
+  Handlers -up- IGame
 }
 
 component "**Message Broker**\nRedis Pub/Sub" as Broker #Lavender
 database "**Redis State**" as Redis #LightBlue
 
 ' ===================== Conexiones generales =====================
-Jugador -down-> Gateway : WebSocket
-
-Gateway -down-> AuthBox : HTTP verify(token)
-Gateway -down-> RoomBox : room:create / room:join
-Gateway -down-> GameBox : disparo:realizar / poder:usar /\ncolocacion:set / salva:disparo
+Gateway ..> IAuth : HTTP verify(token)
+Gateway ..> IRoom : room:create / room:join
+Gateway ..> IGame : disparo:realizar / poder:usar /\ncolocacion:set / salva:disparo
+Gateway ..> IChat : chat:mensaje
 
 AuthBox .right.> Broker
 RoomBox .down.> Broker
@@ -130,13 +141,23 @@ Broker .right.> ObsBox : consume **todos**\nlos eventos
 RoomBox -[#blue]-> Redis
 TimerBox -[#blue]-> Redis
 ChatBox -[#blue]-> Redis
-IA1 -[#blue]down-> Redis : getRoom / saveRoom
-IA2 -[#blue]down-> Redis : SETNX (lock por casilla)
+H1 -[#blue]down-> Redis : getRoom / saveRoom
+H3 -[#blue]down-> Redis : SETNX (lock por casilla)
+
+note bottom of BotBox
+  **Inconsistencia de Proyecto.md §3.7:** el catálogo le
+  asigna puerto 3005, pero el Gateway nunca lo enruta ahí
+  (no aparece en su lista de reenvío, §3.1). Bot solo actúa
+  consumiendo `ShotFired` del Broker — no tiene una interfaz
+  realmente activa hoy.
+end note
 
 legend bottom center
-  <b>Convención:</b> flechas <b>sólidas</b> = comunicación síncrona (HTTP, Socket.io, lectura/escritura en Redis).
-  Flechas <b>punteadas</b> = eventos asíncronos a través del Message Broker (Event-Driven).
-  Dentro de Game Service: Infraestructura → Aplicación → Dominio puro (Arquitectura Hexagonal) — el dominio nunca conoce Redis ni Socket.io.
+  <b>Notación:</b> interfaz (círculo) = el "Puerto" + "Tecnología" documentados en Proyecto.md §3 para ese servicio.
+  Línea con círculo (<b>--</b>) = el servicio <b>provee</b> esa interfaz. Flecha punteada al círculo (<b>..></b>) = el Gateway <b>la usa</b>.
+  Flechas <b>sólidas</b> = comunicación síncrona (HTTP, Socket.io, lectura/escritura en Redis).
+  Flechas <b>punteadas</b> hacia el Broker = eventos asíncronos (Event-Driven).
+  Dentro de Game Service: solo los <b>Handlers</b> exponen la interfaz :3003 — el <b>Dominio puro</b> nunca se expone (Domain Kernel).
 end legend
 
 @enduml

@@ -27,7 +27,7 @@ rectangle "**MICROSERVICIOS**\nCada dominio (salas, juego, chat,\nbot, timer, au
 
 rectangle "**EVENT-DRIVEN**\nLos servicios nunca se llaman\ndirectamente. Publican y\nconsumen eventos a través\nde un Message Broker" as Event #LightGreen
 
-rectangle "**HEXAGONAL**\nEl núcleo del juego (reglas\nde negocio) es puro, sin\ndependencias de Redis,\nSocket.io ni Express" as Hex #LightYellow
+rectangle "**DOMAIN KERNEL**\nEl núcleo del juego (reglas\nde negocio) es puro, sin\ndependencias de Redis,\nSocket.io ni Express.\nHandlers delgados orquestan\nel acceso a Redis" as Kernel #LightYellow
 
 ' --- Por qué cada capa, a su lado, sin estorbar las flechas verticales ---
 note right of Micro
@@ -42,21 +42,22 @@ note right of Event
   Observability). Si Chat se cae, el juego sigue.
 end note
 
-note right of Hex
+note right of Kernel
   **Por qué:** única forma de cumplir
   Modificabilidad (EC-05) y probar el
-  núcleo de concurrencia sin infraestructura.
+  núcleo de concurrencia sin infraestructura
+  — con menos capas que un Hexagonal clásico.
 end note
 
 ' --- Relación entre capas (de arriba hacia abajo, y el cierre del ciclo) ---
 Micro -down-> Event : **requiere**\nun mecanismo de comunicación que\nno acople un servicio a la dirección\nde red de otro
-Event -down-> Hex : **exige**\nque el dominio que reacciona a un\nevento se pueda probar sin levantar\nel broker real
-Hex .[#gray,dashed].> Micro : **cierra el ciclo:** un dominio sin dependencias\nde infraestructura se puede mover a su propio\nproceso sin reescribirlo
+Event -down-> Kernel : **exige**\nque el dominio que reacciona a un\nevento se pueda probar sin levantar\nel broker real
+Kernel .[#gray,dashed].> Micro : **cierra el ciclo:** un dominio sin dependencias\nde infraestructura se puede mover a su propio\nproceso sin reescribirlo (solo se reubica el handler)
 
 legend bottom center
   <b>Si se quitara cualquiera de los tres, el resto pierde sentido:</b>
   Microservicios sin Event-Driven = llamadas HTTP síncronas frágiles.
-  Hexagonal sin Microservicios = sigue dando testeabilidad, pero no resuelve la escalabilidad independiente.
+  Domain Kernel sin Microservicios = sigue dando testeabilidad, pero no resuelve la escalabilidad independiente.
 end legend
 
 @enduml

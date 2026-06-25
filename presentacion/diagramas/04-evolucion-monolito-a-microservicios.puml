@@ -24,7 +24,7 @@ skinparam ArrowFontSize 12
 
 rectangle "**HOY**\nMonolito modular\n19 archivos, ~729 LOC\n1 solo proceso Node.js" as Hoy #LightYellow
 
-rectangle "**SPRINT 1**\nCompletar handlers vacíos\n(colocación, disparo, reconexión)\n+ refactor hexagonal de game/\n(opcional, sin cambiar despliegue)" as Sprint1 #LightGreen
+rectangle "**SPRINT 1**\nCompletar handlers vacíos\n(colocación, disparo, reconexión)\n+ refactor a Domain Kernel en game/\n(dominio puro + handlers, sin cambiar despliegue)" as Sprint1 #LightGreen
 
 rectangle "**SPRINT 2**\nCompletar handlers de poderes,\nsalva y contramedida\n+ observabilidad y KPIs\n+ timeouts de turno" as Sprint2 #LightGreen
 
@@ -53,7 +53,7 @@ note bottom of Sprint2
 end note
 
 note bottom of PostMVP
-  Testeabilidad: 100% · Modificabilidad: 100%
+  Testeabilidad: 95% · Modificabilidad: 90%
   Disponibilidad: 85% · Escalabilidad: 90%
   Costo: ~$7/mes/servicio + ~$15/mes Redis HA
 end note
