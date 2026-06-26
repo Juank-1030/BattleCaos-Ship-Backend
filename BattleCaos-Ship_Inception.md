@@ -172,7 +172,7 @@ La consolidación de actores (ver [Actores](#actores)) no introduce ninguna depe
 | Estimación | ~10 h |
 | Sprint | Sprint 1 |
 
-**Tarea asociada:** DOMF001
+**Tarea asociada:** DOMF001, DOMF002, DOMF003
 
 **Criterios de aceptación (Gherkin):**
 ```gherkin
@@ -194,6 +194,28 @@ And cada proceso debe exponer una forma de verificar que está operativo
 | Tipo | Tarea Técnica |
 | Prioridad | Must |
 | Sprint | Sprint 1 |
+
+#### Tarea: DOMF002 — Enrutamiento de eventos del Gateway y control de tráfico
+> Implementar la tabla de enrutamiento que mapea cada evento Socket.io entrante al canal del bus de eventos correspondiente: `room:create` y `room:join` → Room Service; `disparo:realizar`, `salva:disparo`, `poder:usar`, `colocacion:set`, `contramedida:activar` → Game Service; `chat:mensaje` → Chat Service. Suscribirse a los canales de resultado de cada servicio y reenviar sus publicaciones como broadcasts a los clientes de la sala correcta. Aplicar rate limiting por IP/token para prevenir abuso.
+
+| Atributo | Valor |
+|----------|-------|
+| ID | DOMF002 |
+| Tipo | Tarea Técnica |
+| Prioridad | Must |
+| Sprint | Sprint 1 |
+
+---
+
+#### Tarea: DOMF003 — Suite de tests unitarios del dominio del Game Service
+> Crear la infraestructura mínima de pruebas del proyecto y escribir la suite de tests unitarios para las funciones puras del dominio del Game Service. Cubrir: `processShot` (impacto, fallo, celda repetida), `validatePower` + `applyPower` (los 5 poderes), `addEnergy` (por impacto y por hundimiento), `resolveSalvo` (ventana simultánea, bloqueo SETNX), `activateCountermeasure` (ventana de 5 s), y `evaluateVictory`. Cada test debe ejecutarse sin dependencias de Redis ni Socket.io. Objetivo: cobertura ≥ 85 % en la capa `domain/` del Game Service, satisfaciendo la meta de Testeabilidad de 30 % → 95 % declarada en el atributo de calidad EC-06 del Proyecto.md.
+
+| Atributo | Valor |
+|----------|-------|
+| ID | DOMF003 |
+| Tipo | Tarea Técnica |
+| Prioridad | Should |
+| Sprint | Sprint 2 |
 
 ---
 
@@ -248,7 +270,7 @@ And es dirigido al lobby del juego
 | Sprint | Sprint 1 |
 | Tiempo Real | ✅ Sí |
 
-**Tarea asociada:** DOMF201, DOMF202
+**Tarea asociada:** DOMF201, DOMF202, DOMF203
 
 **Criterios de aceptación (Gherkin):**
 ```gherkin
@@ -272,6 +294,16 @@ And todos los participantes de la sala ven la composición actualizada
 
 #### Tarea: DOMF202 — Aislamiento entre salas concurrentes
 > Garantizar que el estado y los eventos de una sala nunca afecten a otra, incluso cuando existen múltiples salas activas al mismo tiempo. Verificar que el sistema se mantenga estable con al menos 5 salas simultáneas.
+
+#### Tarea: DOMF203 — Publicación de eventos de ciclo de vida de sala
+> Cuando la sala queda completa con todos los jugadores asignados, publicar el evento `RoomReady` con los datos de modo, equipos y jugadores, para que el Game Service inicie la fase de colocación y el Timer Service arranque el temporizador correspondiente. Al unirse cada jugador a la sala, publicar `PlayerRoomJoined` para que el Chat Service cargue el historial de chat acumulado para ese jugador.
+
+| Atributo | Valor |
+|----------|-------|
+| ID | DOMF203 |
+| Tipo | Tarea Técnica |
+| Prioridad | Must |
+| Sprint | Sprint 1 |
 
 ---
 
@@ -324,7 +356,7 @@ And ningún participante calcula ni modifica ese estado por su cuenta
 | Estimación | ~10 h |
 | Sprint | Sprint 1 |
 
-**Tarea asociada:** DOMF401, DOMF402
+**Tarea asociada:** DOMF401, DOMF402, DOMF403
 
 **Criterios de aceptación (Gherkin):**
 ```gherkin
@@ -348,6 +380,16 @@ And recibe el estado actual completo de la partida, igual que si nunca se hubier
 
 #### Tarea: DOMF402 — El usuario desconectado conserva su lugar (no se expulsa)
 > Cuando un usuario pierde la conexión, no se le retira de la lista de jugadores ni de su equipo: se le marca como desconectado, conservando su tablero, su energía y su turno tal como estaban. La partida (o sala) solo se cierra cuando ya no queda ningún usuario conectado en ella, o cuando se cumple la condición de abandono definitivo de DOMF1301. **Esta tarea es la que hoy falta corregir primero**: sin ella, no hay nada que DOMF401 pueda recuperar.
+
+#### Tarea: DOMF403 — Publicación de eventos de desconexión y reconexión desde la sala
+> Tras marcar a un usuario como desconectado (DOMF402), publicar el evento `PlayerDisconnectedFromRoom` para que el Game Service pause el turno si es su turno, el Timer Service inicie el tiempo de espera de DOMF1301, y el Chat Service y el Observability Service registren la novedad. Al reasociar la conexión y marcar al usuario como conectado de nuevo (DOMF401), publicar `PlayerReconnected` para que el Game Service reanude la partida y el Timer Service cancele el tiempo de espera. Cuando todos los jugadores se hayan ido definitivamente, publicar `RoomDestroyed` para que Observability registre el cierre de sala.
+
+| Atributo | Valor |
+|----------|-------|
+| ID | DOMF403 |
+| Tipo | Tarea Técnica |
+| Prioridad | Must |
+| Sprint | Sprint 1 |
 
 ---
 
@@ -380,7 +422,7 @@ And se confirma la colocación al usuario
 ---
 
 #### Tarea: DOMF501 — Validación y registro de la colocación de flota
-> Validar que cada barco colocado no se solape con otro ni exceda los límites del tablero. Rechazar colocaciones inválidas con el motivo correspondiente. Registrar la posición final de la flota de cada usuario y confirmar la colocación.
+> Validar que cada barco colocado no se solape con otro ni exceda los límites del tablero. Rechazar colocaciones inválidas con el motivo correspondiente. Registrar la posición final de la flota de cada usuario y confirmar la colocación. Tras confirmar, publicar el evento `ShipsPlaced` en Redis Pub/Sub para que el Game Service lo propague al compañero de equipo en tiempo real (base de DOMF502).
 
 ---
 
@@ -628,12 +670,22 @@ And se muestra un indicador de calidad de conexión
 | Estimación | ~8 h |
 | Sprint | Sprint 1 |
 
-**Tarea asociada:** UIUXF401
+**Tarea asociada:** UIUXF401, DOMF1103
 
 ---
 
 #### Tarea: UIUXF401 — Chat de equipo y general en tiempo real
 > Panel de mensajes con campo de entrada. En modos de equipo, separar el canal privado del equipo del canal general. Desplazamiento automático a los mensajes nuevos y visualización del nombre del emisor.
+
+#### Tarea: DOMF1103 — Servicio de mensajería: recepción, persistencia y enrutamiento
+> Recibir los eventos `chat:mensaje` que el Gateway reenvía desde el cliente. Validar que el emisor pertenezca a la sala. Persistir el mensaje en el historial de Redis de esa sala usando `LPUSH` + `LTRIM` para conservar únicamente los últimos 100 mensajes. En modo 2v2, enrutar el mensaje solo a los miembros del equipo del emisor si se trata de un canal privado, o a todos los participantes si es el canal general. Publicar el evento `ChatMessage` para que el Observability Service lo registre. Al recibir el evento `PlayerRoomJoined`, cargar el historial acumulado y entregárselo al nuevo jugador.
+
+| Atributo | Valor |
+|----------|-------|
+| ID | DOMF1103 |
+| Tipo | Tarea Técnica |
+| Prioridad | Should |
+| Sprint | Sprint 1 |
 
 ---
 
@@ -908,12 +960,22 @@ Then ese disparo es rechazado
 | Estimación | ~4 h |
 | Sprint | Sprint 2 |
 
-**Tarea asociada:** DOMF1101
+**Tarea asociada:** DOMF1101, DOMF1102
 
 ---
 
 #### Tarea: DOMF1101 — Oponente automático con disparo y remate básico
 > El oponente automático dispara a una coordenada no resuelta. Si impacta, prioriza las casillas adyacentes en su siguiente disparo para intentar hundir el barco.
+
+#### Tarea: DOMF1102 — Integración del oponente automático con el bus de eventos
+> Suscribir el servicio del oponente automático al bus de eventos para recibir los eventos `ShotFired` y `PhaseChanged` publicados por el Game Service. Al detectar que es el turno del oponente en una partida de modo `1v1-bot`, invocar la lógica de decisión de DOMF1101 y publicar el evento `BotDecision` con la coordenada elegida, para que el Game Service lo procese como un disparo ordinario del bot.
+
+| Atributo | Valor |
+|----------|-------|
+| ID | DOMF1102 |
+| Tipo | Tarea Técnica |
+| Prioridad | Could |
+| Sprint | Sprint 2 |
 
 ---
 
@@ -972,17 +1034,27 @@ Then los indicadores de negocio se actualizan
 | Estimación | ~11 h |
 | Sprint | Sprint 2 |
 
-**Tarea asociada:** DOMF1301, DOMF1302
+**Tarea asociada:** DOMF1301, DOMF1302, DOMF1303
 
 **Nota de aclaración:** la regla básica de "desconectarse no es abandonar" vive en DOMF402 ([DOMH05](#domh05)), porque sin ella la reconexión no tendría nada que recuperar. Lo que aporta esta historia es el refinamiento: cuánto se espera antes de dar a alguien por retirado, y qué pasa con su turno mientras tanto.
 
 ---
 
 #### Tarea: DOMF1301 — Límite de tiempo de turno y abandono definitivo por desconexión prolongada
-> Establecer un límite de tiempo para que un usuario actúe en su turno; si lo supera, pasar el turno automáticamente. Establecer, además, un tiempo máximo de espera para un usuario marcado como desconectado (DOMF402); si se reconecta antes de que venza, continúa con normalidad; si no, se le da por retirado definitivamente y se libera su lugar en la partida.
+> Cuando el Game Service recibe el evento `PlayerDisconnectedFromRoom` (DOMF403) durante el turno de un jugador, pausar ese turno inmediatamente —sin pasarlo al siguiente— y esperar a que el jugador reconecte o a que el tiempo de espera venza. Establecer además un límite de tiempo para que un usuario actúe en su turno en condiciones normales; si lo supera, pasar el turno automáticamente. Establecer el tiempo máximo de espera para un usuario marcado como desconectado (DOMF402); si se reconecta antes de que venza, continúa con normalidad; si no, se le da por retirado definitivamente y se libera su lugar en la partida.
 
 #### Tarea: DOMF1302 — Verificación de disponibilidad previa a la operación
 > Exponer una forma de verificar que el servicio está disponible y responde correctamente antes de iniciar la operación normal.
+
+#### Tarea: DOMF1303 — Timer Service: elección de líder, heartbeat y gestión de temporizadores
+> Implementar la elección de líder del Timer Service usando `SETNX` en Redis con TTL de 1 segundo: solo la instancia que adquiere el lease actúa como master; las demás esperan en standby. El master renueva el lease cada 500ms (heartbeat). Si el master falla y el lease expira, cualquier instancia standby puede tomar el liderazgo en aproximadamente 1.5 segundos (failover automático). Al convertirse en master, suscribirse a los eventos `RoomReady` y `PhaseChanged` para arrancar el temporizador de la fase correspondiente (COLOCACION: 60s, TURNO: 30s, SALVA: 8s, CONTRAMEDIDA: 5s). Publicar `TimerEnd` cuando el temporizador vence y `TimerTick` cada 100ms con el tiempo restante para que el Gateway lo distribuya a los clientes.
+
+| Atributo | Valor |
+|----------|-------|
+| ID | DOMF1303 |
+| Tipo | Tarea Técnica |
+| Prioridad | Should |
+| Sprint | Sprint 2 |
 
 ---
 
