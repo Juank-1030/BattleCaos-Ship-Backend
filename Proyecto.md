@@ -216,8 +216,8 @@ Arquitectura **híbrida** que combina tres paradigmas:
 |-----------|-------|
 | **Rol** | Core del juego: motor de fases, tableros, disparos, poderes, energía |
 | **Estado** | Existe como `game/*` (215 LOC en 7 archivos) + `state/index.js` (37 LOC) |
-| **Puerto** | 3003 (WebSocket interno) |
-| **Tecnología** | Socket.io + ioredis |
+| **Puerto** | Ninguno (solo Redis Pub/Sub, no expone HTTP ni WebSocket) |
+| **Tecnología** | Node.js + ioredis (sin Socket.io — la comunicación es solo vía Redis) |
 | **Escalabilidad** | **Horizontal** (es el servicio crítico, escala con partidas activas) |
 
 **Responsabilidades:**
@@ -225,9 +225,8 @@ Arquitectura **híbrida** que combina tres paradigmas:
 - Procesar colocación de barcos, disparos, poderes y contra-medidas
 - Validar turnos, energía, reglas de juego
 - Calcular impacto de disparos (agua, impacto, hundido)
-- Manejar la salva simultánea con locks atómicos en Redis
-- Publicar eventos de todo lo que ocurre en la partida
-- Broadcast de snapshots de estado a los clientes
+- Manejar la salva simultánea con locks atómicos en Redis (`SETNX`)
+- Publicar eventos de resultado a Redis Pub/Sub (el Gateway se encarga del broadcast a clientes)
 
 **Arquitectura Domain Kernel** (detalle en sección 5).
 
