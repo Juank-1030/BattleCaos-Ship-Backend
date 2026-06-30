@@ -1,7 +1,7 @@
 @startuml 05-componentes-por-servicio
 
-title Componentes Internos de Cada Microservicio — con Puerto/Interfaz
-header Puerto + Tecnología tomados literalmente de Proyecto.md §3 (catálogo de microservicios)
+title Componentes Internos de Cada Microservicio
+header Solo Gateway (:3000) y Auth (:3001) tienen puerto. Los demás son workers Redis Pub/Sub puros.
 
 !theme plain
 skinparam defaultFontName Consolas
@@ -45,62 +45,78 @@ skinparam ArrowFontSize 10
 
 actor "Jugador" as Jugador
 
-interface "**:443**\nHTTPS/WSS" as IGateway
-component "**Gateway**\nExpress + Socket.io\nAuth middleware · Rate limiting\nEnrutamiento · GET /health" as Gateway #Wheat
-
+' ===================== GATEWAY — único punto de entrada =====================
+interface "**:3000**\nHTTPS/WSS" as IGateway
+package "**Gateway**" as GatewayBox #Wheat {
+  rectangle "Express + Socket.io\n/health · /kpis" as GW1
+  rectangle "**JWT middleware**\njwt.verify(token, JWT_SECRET)\n→ verifica localmente, sin llamar a Auth" as GW2
+  rectangle "Rate limiting\nREDIS INCR · 20 req/s/IP" as GW3
+  rectangle "Enrutamiento\nROUTES → publish svc:*" as GW4
+  rectangle "Reconexión\nactualiza socketId en Redis" as GW5
+}
 Jugador -down-> IGateway
-IGateway - Gateway
+IGateway - GatewayBox
 
-' ===================== FILA 1: servicios simples, cada uno con su interfaz =====================
-together {
-  interface "**:3001**\nHTTP" as IAuth
-  package "Auth Service" as AuthBox #LightCyan {
-    rectangle "Middleware\nverify(JWT)" as Auth1
-    rectangle "createToken()\nGoogle OAuth → JWT" as Auth2
-  }
-  AuthBox -- IAuth
+' ===================== AUTH — único servicio con HTTP propio =====================
+interface "**:3001**\nHTTP REST" as IAuth
+package "**Auth Service**" as AuthBox #LightCyan {
+  rectangle "POST /auth/google\nverifyGoogleToken(idToken)\n→ google-auth-library" as Auth1
+  rectangle "signToken(payload)\njwt.sign() con JWT_SECRET\nexpira en 24h" as Auth2
+  rectangle "GET /health\nping Redis" as Auth3
+}
+AuthBox -- IAuth
+Jugador ..> IAuth : POST /auth/google\n(solo al iniciar sesión)
 
-  interface "**:3002**\nWS interno" as IRoom
-  package "Room Service" as RoomBox #LightCyan {
-    rectangle "createRoom / joinRoom\ncódigo único, cupo, equipos" as Room1
-    rectangle "markDisconnected /\nmarkReconnected\nconectado: true|false" as Room2
-    rectangle "checkRoomLifecycle\ndestruye solo si\nnadie queda conectado" as Room3
-  }
-  RoomBox -- IRoom
+note right of AuthBox
+  Auth no verifica tokens
+  en conexiones Socket.io.
+  Eso lo hace Gateway
+  localmente con JWT_SECRET.
+end note
 
-  package "Timer Service\n(sin puerto — solo Redis Pub/Sub)" as TimerBox #LightCyan {
-    rectangle "Leader election\nSET NX EX + heartbeat 500ms" as Timer1
-    rectangle "startTimer / stopTimer\nCOLOCACION · TURNO\nSALVA · CONTRAMEDIDA" as Timer2
-    rectangle "Tick broadcaster\ncada 100ms" as Timer3
+' ===================== ROOM SERVICE — Domain Kernel =====================
+package "**Room Service** — Domain Kernel\n(sin puerto — solo svc:room)" as RoomBox #LightYellow {
+
+  package "Handlers (orquestación)" as RoomHandlers #LightBlue {
+    rectangle "handleCreate\nhandleJoin\nhandleDisconnect" as RH1
   }
+
+  package "Dominio puro (src/domain/room.js)" as RoomDomain #LightGreen {
+    rectangle "crearSala · agregarJugador\nmarcarDesconectado · estaLlena\ncalcularEquipos · asignarEquipo\nvalidarModo · generarCodigo" as RD1
+  }
+
+  RoomHandlers -down-> RoomDomain : llaman funciones puras\n(0 dependencias externas)
 }
 
-' ===================== FILA 2: servicios no críticos =====================
+' ===================== TIMER SERVICE =====================
+package "**Timer Service**\n(sin puerto — solo Redis Pub/Sub)" as TimerBox #LightCyan {
+  rectangle "Leader election\nSET NX EX + heartbeat 500ms" as Timer1
+  rectangle "startTimer / stopTimer\nCOLOCACION · TURNO\nSALVA · CONTRAMEDIDA" as Timer2
+  rectangle "Tick broadcaster\ncada 100ms → evt:TimerTick" as Timer3
+}
+
+' ===================== CHAT + BOT + OBS =====================
 together {
-  interface "**:3004**\nWS interno" as IChat
-  package "Chat Service" as ChatBox #LightCyan {
+  package "**Chat Service**\n(sin puerto — solo svc:chat)" as ChatBox #LightCyan {
     rectangle "recibe chat:mensaje\nrutea equipo/global" as Chat1
-    rectangle "persiste últimos\n100 mensajes" as Chat2
+    rectangle "persiste últimos\n100 mensajes en Redis List" as Chat2
   }
-  ChatBox -- IChat
 
-  package "Bot Service\n(:3005 en el catálogo, pero\nsin interfaz activa — ver nota)" as BotBox #LightCyan {
+  package "**Bot Service**\n(sin puerto — solo evt:ShotFired)" as BotBox #LightCyan {
     rectangle "escucha ShotFired\n(modo 1v1-bot)" as Bot1
-    rectangle "decide disparo\n(hoy random)" as Bot2
+    rectangle "decide disparo\n(hoy: random)" as Bot2
   }
 
-  package "Observability Service\n(sin puerto)" as ObsBox #LightCyan {
-    rectangle "consume TODOS\nlos eventos (*)" as Obs1
-    rectangle "calcula KPIs\nlatencia, % reconexión,\n% partidas completadas" as Obs2
+  package "**Observability Service**\n(sin puerto — consume evt:*)" as ObsBox #LightCyan {
+    rectangle "consume TODOS\nlos eventos evt:*" as Obs1
+    rectangle "calcula KPIs en Redis\nlatencia · % reconexión\n% partidas completadas" as Obs2
   }
 }
 
-' ===================== Game Service — el más complejo (Domain Kernel) =====================
-interface "**:3003**\nWS interno" as IGame
+' ===================== GAME SERVICE — Domain Kernel =====================
+package "**Game Service** — Domain Kernel\n(sin puerto — solo svc:game)" as GameBox #LightYellow {
 
-package "**Game Service** — Domain Kernel" as GameBox #LightYellow {
-
-  package "Handlers (orquestación — leen/escriben Redis directo)" as Handlers #LightBlue {
+  package "Handlers (orquestación — leen/escriben Redis)" as GameHandlers #LightBlue {
     rectangle "handleShot.js" as H1
     rectangle "handlePower.js" as H2
     rectangle "handleSalvo.js\n(SETNX por casilla)" as H3
@@ -109,7 +125,7 @@ package "**Game Service** — Domain Kernel" as GameBox #LightYellow {
     rectangle "broker.js\n(enruta eventos del Pub/Sub)" as H6
   }
 
-  package "Dominio puro (0 dependencias, sin interfaz propia)" as Domain #LightGreen {
+  package "Dominio puro (0 dependencias, sin interfaz propia)" as GameDomain #LightGreen {
     rectangle "GameEngine" as D1
     rectangle "Board · Fleet" as D2
     rectangle "Powers · Energy" as D3
@@ -117,47 +133,43 @@ package "**Game Service** — Domain Kernel" as GameBox #LightYellow {
     rectangle "Countermeasure" as D5
   }
 
-  Handlers -down-> Domain : llaman funciones puras\n(sin lógica de negocio propia)
-  Handlers -up- IGame
+  GameHandlers -down-> GameDomain : llaman funciones puras\n(sin lógica de negocio propia)
 }
 
+' ===================== INFRAESTRUCTURA =====================
 component "**Message Broker**\nRedis Pub/Sub" as Broker #Lavender
-database "**Redis State**" as Redis #LightBlue
+database "**Redis State**\nsala:{codigo} · chat\nenergia · locks · KPIs" as Redis #LightBlue
 
-' ===================== Conexiones generales =====================
-Gateway ..> IAuth : HTTP verify(token)
-Gateway ..> IRoom : room:create / room:join
-Gateway ..> IGame : disparo:realizar / poder:usar /\ncolocacion:set / salva:disparo
-Gateway ..> IChat : chat:mensaje
+' ===================== Conexiones =====================
+' Gateway publica en Redis, nunca llama directamente a servicios de dominio
+GatewayBox -down-> Broker : publish svc:room\npublish svc:game\npublish svc:chat
+Broker .up.> GatewayBox : subscribe gw:broadcast\nevt:TimerTick · evt:PhaseChanged
 
-AuthBox .right.> Broker
-RoomBox .down.> Broker
-TimerBox .down.> Broker
-ChatBox .down.> Broker
-BotBox .down.> Broker
-GameBox .down.> Broker
-Broker .right.> ObsBox : consume **todos**\nlos eventos
+RoomBox .down.> Broker : publish gw:broadcast\nevt:RoomReady · evt:PlayerRoomJoined\nevt:RoomDestroyed · evt:PlayerDisconnectedFromRoom
+GameBox .down.> Broker : publish gw:broadcast\nevt:ShotFired · evt:PhaseChanged\nevt:GameEnded · evt:PowerUsed
+TimerBox .down.> Broker : publish evt:TimerTick\nevt:TimerEnd
+ChatBox .down.> Broker : publish evt:ChatMessage
+BotBox .down.> Broker : publish evt:BotDecision
+
+Broker .right.> RoomBox : subscribe svc:room\nPlayerDisconnected
+Broker .right.> GameBox : subscribe svc:game\nevt:RoomReady · evt:TimerEnd\nevt:BotDecision
+Broker .right.> ChatBox : subscribe svc:chat\nevt:PlayerRoomJoined
+Broker .right.> TimerBox : subscribe evt:RoomReady\nevt:PhaseChanged
+Broker .right.> BotBox : subscribe evt:ShotFired
+Broker .down.> ObsBox : consume **todos** los eventos
 
 RoomBox -[#blue]-> Redis
 TimerBox -[#blue]-> Redis
 ChatBox -[#blue]-> Redis
-H1 -[#blue]down-> Redis : getRoom / saveRoom
-H3 -[#blue]down-> Redis : SETNX (lock por casilla)
-
-note bottom of BotBox
-  **Inconsistencia de Proyecto.md §3.7:** el catálogo le
-  asigna puerto 3005, pero el Gateway nunca lo enruta ahí
-  (no aparece en su lista de reenvío, §3.1). Bot solo actúa
-  consumiendo `ShotFired` del Broker — no tiene una interfaz
-  realmente activa hoy.
-end note
+GameBox -[#blue]-> Redis : getRoom / saveRoom\nSETNX (lock salva)
 
 legend bottom center
-  <b>Notación:</b> interfaz (círculo) = el "Puerto" + "Tecnología" documentados en Proyecto.md §3 para ese servicio.
-  Línea con círculo (<b>--</b>) = el servicio <b>provee</b> esa interfaz. Flecha punteada al círculo (<b>..></b>) = el Gateway <b>la usa</b>.
-  Flechas <b>sólidas</b> = comunicación síncrona (HTTP, Socket.io, lectura/escritura en Redis).
-  Flechas <b>punteadas</b> hacia el Broker = eventos asíncronos (Event-Driven).
-  Dentro de Game Service: solo los <b>Handlers</b> exponen la interfaz :3003 — el <b>Dominio puro</b> nunca se expone (Domain Kernel).
+  <b>Notación:</b>
+  Interfaz (círculo) = puerto público. Solo existen :3000 (Gateway) y :3001 (Auth).
+  Room / Game / Chat / Timer / Bot / Observability: sin puerto — workers Redis puros.
+  Flechas sólidas = comunicación síncrona (HTTP, Redis GET/SET).
+  Flechas punteadas = eventos asíncronos Pub/Sub.
+  Fondo amarillo = Domain Kernel (Handlers + Dominio puro sin dependencias externas).
 end legend
 
 @enduml
