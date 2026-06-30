@@ -1,6 +1,6 @@
-@startuml 04-evolucion-monolito-a-microservicios
+@startuml 04-evolucion-microservicios
 
-title Evolución: Monolito Modular → Arquitectura Híbrida
+title Evolución del Sistema — Estado Actual y Camino al MVP
 
 !theme plain
 left to right direction
@@ -22,40 +22,35 @@ skinparam note {
 skinparam ArrowColor #333333
 skinparam ArrowFontSize 12
 
-rectangle "**HOY**\nMonolito modular\n19 archivos, ~729 LOC\n1 solo proceso Node.js" as Hoy #LightYellow
+rectangle "**COMPLETADO**\nCimientos + Comunicación\n─────────────────\nGateway :3000\n  JWT · Rate Limiting · /health · /kpis\nAuth :3001\n  Google OAuth · JWT signing\nRoom Service\n  Domain Kernel · 100% unit test coverage\n  Prueba de integración (13/13 OK)" as Hecho #LightGreen
 
-rectangle "**SPRINT 1**\nCompletar handlers vacíos\n(colocación, disparo, reconexión)\n+ refactor a Domain Kernel en game/\n(dominio puro + handlers, sin cambiar despliegue)" as Sprint1 #LightGreen
+rectangle "**EN CONSTRUCCIÓN**\nMotor de Juego + Servicios de Soporte\n─────────────────\nGame Service\n  Domain Kernel (engine, board, fleet,\n  powers, salvo, countermeasure)\nTimer Service\n  Leader election SETNX · ticks 100ms\nChat Service\n  Persistencia 100 mensajes\nBot Service\n  Modo 1v1-bot · decisión aleatoria\nObservability Service\n  KPIs · audit log · métricas" as EnCurso #LightYellow
 
-rectangle "**SPRINT 2**\nCompletar handlers de poderes,\nsalva y contramedida\n+ observabilidad y KPIs\n+ timeouts de turno" as Sprint2 #LightGreen
+rectangle "**MVP FINAL**\nIntegración y Entrega\n─────────────────\nFrontend React + Vite\n  Socket.io client · Google Sign-In\n  Tablero naval · Lobby · Chat\nTodos los servicios integrados\nPruebas de integración E2E\nPresentación: 8 julio 2026" as MVP #LightBlue
 
-rectangle "**POST-MVP**\nSeparación física en\nmicroservicios independientes\n+ Redis con alta disponibilidad\n+ Gateway replicado" as PostMVP #LightBlue
+Hecho -right-> EnCurso : próximos\nrepositorios
+EnCurso -right-> MVP : integración\nfrontend
 
-Hoy -right-> Sprint1 : entrega académica\n(2 sprints)
-Sprint1 -right-> Sprint2
-Sprint2 -right-> PostMVP : evolución\n(fuera del MVP)
-
-note bottom of Hoy
-  Testeabilidad: 30%
-  Disponibilidad: 50%
-  Modificabilidad: 60%
+note bottom of Hecho
+  3 microservicios operativos.
+  Tests unitarios: 72 tests, 100% coverage.
+  Tests integración: 13/13 OK (room).
+  Logger estructurado pino en todos.
+  Costo despliegue: $0 (Upstash free tier).
 end note
 
-note bottom of Sprint1
-  Sigue siendo 1 solo
-  proceso desplegado.
-  Costo: $0.
+note bottom of EnCurso
+  Game es el más complejo.
+  Bot y Observability son no críticos
+  (si Chat cae, el juego continúa).
+  Mismo patrón: Domain Kernel + vitest.
 end note
 
-note bottom of Sprint2
-  MVP completo, listo
-  para la entrega.
-  Costo: $0.
-end note
-
-note bottom of PostMVP
-  Testeabilidad: 95% · Modificabilidad: 90%
-  Disponibilidad: 85% · Escalabilidad: 90%
-  Costo: ~$7/mes/servicio + ~$15/mes Redis HA
+note bottom of MVP
+  Presentación: 8 julio 2026.
+  Costo MVP: $0.
+  Escalabilidad futura: replicar
+  servicios individualmente según carga.
 end note
 
 @enduml
