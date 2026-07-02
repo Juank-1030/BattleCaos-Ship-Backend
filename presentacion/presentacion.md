@@ -20,7 +20,8 @@
 9. Justificación tecnológica
 10. Testing y calidad del código
 11. Tensiones reconocidas
-12. Conclusiones
+12. Historias de usuario y tareas técnicas
+13. Conclusiones
 
 ---
 
@@ -104,47 +105,81 @@ Game Service · Timer Service · Chat Service · Bot Service · Observability
 
 ## 5. Escenarios de calidad
 
-### EC-01 — Desempeño en tiempo real
+### EC-01 — Desempeño en tiempo real *(deriva de DOMH04)*
 
-| Estímulo | Un jugador realiza un disparo |
-|---|---|
-| Respuesta | El servidor procesa y retransmite el resultado |
-| **Medida** | **Latencia P95 < 200ms** (estimado actual: ~35ms) |
+| Elemento | Valor |
+|----------|-------|
+| Fuente de Estímulo | Usuario |
+| Estímulo | Realiza una acción que cambia el estado de la partida (disparo, turno, fase) |
+| Artefacto | Distribución del estado de la partida |
+| Entorno | Operación normal, hasta 5 salas concurrentes |
+| Respuesta | El sistema resuelve la acción y entrega el estado actualizado a todos los participantes de la sala |
+| Medida de Respuesta | **Latencia P95 < 200 ms** entre la acción y la actualización recibida — estimado actual: **~35 ms** |
 
-### EC-02 — Concurrencia sin condiciones de carrera
+---
 
-| Estímulo | Dos jugadores disparan casi al mismo tiempo a la misma casilla |
-|---|---|
-| Respuesta | Solo el primero en llegar resuelve la casilla |
-| **Medida** | **0% de casillas resueltas dos veces** |
+### EC-02 — Concurrencia sin condiciones de carrera *(deriva de DOMH12)*
 
-### EC-03 — Disponibilidad ante caída de red
+| Elemento | Valor |
+|----------|-------|
+| Fuente de Estímulo | Dos o más usuarios |
+| Estímulo | Disparan a la misma casilla casi en el mismo instante, durante la ventana de disparo simultáneo |
+| Artefacto | Resolución exclusiva por casilla (lock `SETNX` en Redis) |
+| Entorno | Ventana de disparo simultáneo activa, con disparos concurrentes de prueba |
+| Respuesta | Solo el disparo que llega primero resuelve la casilla; los demás se rechazan como repetidos |
+| Medida de Respuesta | **0% de casillas resueltas dos veces** en pruebas con disparos concurrentes simulados |
 
-| Estímulo | Jugador pierde la conexión y vuelve a conectarse |
-|---|---|
-| Respuesta | El sistema reasigna el socket y entrega el estado completo |
-| **Medida** | **>95% reconexiones exitosas, recuperación <3s** |
+---
 
-### EC-04 — Seguridad de acceso
+### EC-03 — Disponibilidad ante caída de red *(deriva de DOMH05)*
 
-| Estímulo | Usuario sin credencial válida intenta conectarse |
-|---|---|
-| Respuesta | El sistema rechaza la conexión sin exponer estado interno |
-| **Medida** | **0% de accesos no autorizados aceptados** |
+| Elemento | Valor |
+|----------|-------|
+| Fuente de Estímulo | Usuario |
+| Estímulo | Pierde la conexión durante una partida activa y vuelve a conectarse |
+| Artefacto | Recuperación de estado tras reconexión |
+| Entorno | Operación normal, partida en curso |
+| Respuesta | El sistema reasocia al usuario y le entrega el estado completo y actual de su partida |
+| Medida de Respuesta | **> 95% de reconexiones exitosas**, recuperación en **menos de 3 segundos** |
 
-### EC-05 — Modificabilidad del catálogo de poderes
+---
 
-| Estímulo | Se requiere agregar un nuevo poder al juego |
-|---|---|
-| Respuesta | El desarrollador implementa el poder sin tocar otros módulos |
-| **Medida** | **Máximo 2 archivos nuevos, implementado en <3 horas** |
+### EC-04 — Seguridad de acceso *(deriva de DOMH02)*
 
-### EC-06 — Escalabilidad por aislamiento de salas
+| Elemento | Valor |
+|----------|-------|
+| Fuente de Estímulo | Usuario sin credencial válida (sesión expirada, manipulada o inexistente) |
+| Estímulo | Intenta establecer conexión o realizar una acción sobre una partida |
+| Artefacto | Verificación de identidad en cada conexión Socket.io (middleware JWT local) |
+| Entorno | Operación normal |
+| Respuesta | El sistema rechaza la conexión o la acción y no expone ningún estado de partida |
+| Medida de Respuesta | **0% de accesos no autorizados aceptados** en pruebas con credenciales inválidas o expiradas |
 
-| Estímulo | Varias salas activas simultáneamente |
-|---|---|
-| Respuesta | Cada sala opera aislada, ningún evento se filtra a otra |
-| **Medida** | **0 fugas entre salas con 5+ salas concurrentes** |
+---
+
+### EC-05 — Modificabilidad del catálogo de poderes *(deriva de DOMH10)*
+
+| Elemento | Valor |
+|----------|-------|
+| Fuente de Estímulo | Desarrollador |
+| Estímulo | Agrega un nuevo poder al catálogo existente |
+| Artefacto | Módulo de poderes del motor de juego (Domain Kernel) |
+| Entorno | Tiempo de diseño |
+| Respuesta | El nuevo poder se integra sin modificar la validación de turnos, energía ni disparos |
+| Medida de Respuesta | **Máximo 2 archivos** modificados o agregados; implementado y probado en **menos de 3 horas** |
+
+---
+
+### EC-06 — Escalabilidad por aislamiento de salas *(deriva de DOMH03)*
+
+| Elemento | Valor |
+|----------|-------|
+| Fuente de Estímulo | Usuarios de distintas partidas |
+| Estímulo | Crean y juegan simultáneamente en múltiples salas |
+| Artefacto | Aislamiento entre salas concurrentes (clave Redis `sala:{codigo}`) |
+| Entorno | Carga sostenida de al menos 5 salas activas |
+| Respuesta | Cada sala opera de forma aislada; ningún evento de una sala afecta a otra |
+| Medida de Respuesta | **0 fugas de eventos** entre salas; sin degradación perceptible de latencia con **5 o más salas concurrentes** |
 
 ---
 
@@ -293,7 +328,71 @@ El overhead sigue siendo 5× menor que el umbral exigido.
 
 ---
 
-## 12. Conclusiones
+## 12. Historias de usuario y tareas técnicas
+
+### Épicas del proyecto
+
+| Épica | Descripción | Historias | Tareas |
+|-------|-------------|:---------:|:------:|
+| **DOM-0** | Backend: autenticación, salas, motor de juego, observabilidad | 15 | 29 |
+| **UIUX-1** | Frontend: pantallas, tablero, poderes, chat | 13 | 14 |
+| **DOC-2** | Documentación: diagramas, contratos, concurrencia | 5 | 5 |
+| **Total** | 2 sprints — entrega 8 julio 2026 | **33** | **48** |
+
+---
+
+### Sprint 1 — Cimientos, Conexión y Core
+
+| Historia | Enunciado | Prioridad | Estado | Tareas técnicas |
+|----------|-----------|:---------:|:------:|-----------------|
+| **DOMH01** | Estado centralizado como fuente única de verdad | Must | ✅ | DOMF001 · DOMF002 |
+| **DOMH02** | Identificación segura del usuario | Must | ✅ | DOMF101 · DOMF102 |
+| **DOMH03** | Creación y unión a salas mediante código | Must | ✅ | DOMF201 · DOMF202 · DOMF203 |
+| **DOMH04** | Estado de partida siempre actualizado | Must | ⬜ | DOMF301 · DOMF302 |
+| **DOMH05** | Recuperación de partida tras desconexión | Must | 🔄 | DOMF401 · DOMF402 ✅ · DOMF403 ✅ |
+| **DOMH06** | Colocación de la flota propia | Must | ⬜ | DOMF501 |
+| **DOMH07** | Colocación coordinada en equipo (2v2) | Must | ⬜ | DOMF502 |
+| **DOMH08** | Disparos por turnos con resultado visible | Must | ⬜ | DOMF601 · DOMF602 |
+| **DOMH09** | Acumulación de energía por equipo | Must | ⬜ | DOMF701 |
+| UIUXH01–08 | Identidad visual, login, lobby, tablero, chat, colocación, turno, energía | Must / Should | ⬜ | UIUXF001–701 |
+| **DOCH01** | Arquitectura documentada | Must | ✅ | DOCF001 |
+| **DOCH02** | Acceso y comunicación documentados | Must | ✅ | DOCF101 |
+| **DOCH03** | Motor del juego documentado | Must | 🔄 | DOCF201 |
+
+---
+
+### Sprint 2 — Mecánicas, Observabilidad y Cierre
+
+| Historia | Enunciado | Prioridad | Estado | Tareas técnicas |
+|----------|-----------|:---------:|:------:|-----------------|
+| **DOMH10** | Poderes mediante energía acumulada | Must | ⬜ | DOMF801 · DOMF802 |
+| **DOMH11** | Ventana de reacción para anular un poder | Must | ⬜ | DOMF901 |
+| **DOMH12** | Ronda de disparo simultáneo ← reto de concurrencia | Must | ⬜ | DOMF1001 · **DOMF1002** |
+| **DOMH13** | Oponente automático (modo 1v1-Bot) | Could | ⬜ | DOMF1101 · DOMF1102 |
+| **DOMH14** | Visibilidad del comportamiento del sistema | Must | ⬜ | DOMF1201 · DOMF1202 · DOMF1203 |
+| **DOMH15** | Continuidad ante inactividad o desconexión | Should | ⬜ | DOMF1301 · DOMF1302 · DOMF1303 |
+| UIUXH09–13 | Poderes, reacción, salva, indicadores, cierre | Must / Could | ⬜ | UIUXF801–1201 |
+| **DOCH04** | Concurrencia documentada | Must | ⬜ | DOCF301 |
+| **DOCH05** | Documentación de cierre y demo | Must | ⬜ | DOCF401 |
+
+---
+
+### Resumen de avance — Sprint 1
+
+| Métrica | Valor |
+|---------|-------|
+| Historias de dominio completadas | 3 de 9 — DOMH01 · DOMH02 · DOMH03 |
+| Historias de dominio en progreso | 1 de 9 — DOMH05 (desconexión 2/3 tareas ✅) |
+| Microservicios operativos en producción | 3 de 8 — Gateway · Auth · Room |
+| Tests unitarios — 100% cobertura | 72 tests |
+| Tests de integración Room | 13/13 OK |
+| Costo de infraestructura | $0 (Render + Upstash free tier) |
+
+**DOMF1002** (resolución exclusiva por casilla + SETNX) es el núcleo del reto de concurrencia del curso — cubierto por EC-02.
+
+---
+
+## 13. Conclusiones
 
 - **La arquitectura funciona hoy:** 3 microservicios operativos en producción, 72 tests unitarios al 100% de cobertura, 13 pruebas de integración end-to-end sin fallos
 

@@ -1,7 +1,7 @@
 @startuml 02-vision-general-arquitectura
 
 title Visión General — Microservicios + Event-Driven + Domain Kernel
-header Interfaces públicas: :3000 (Gateway) y :3001 (Auth). Interfaz interna compartida: :6379 Redis Pub/Sub.
+header Interfaces públicas: :3000 (Gateway) y :3001 (Auth). Infraestructura interna: Redis State + Kafka Bus.
 
 !theme plain
 skinparam defaultFontName Consolas
@@ -45,11 +45,11 @@ skinparam ArrowFontSize 11
 
 actor "Jugador" as Jugador
 
-' ── Interfaces públicas (las únicas que el cliente conoce) ────────────────────
+' ── Interfaces públicas ────────────────────────────────────────────────────────
 interface "**:3000**\nHTTPS / WSS" as IGateway
 interface "**:3001**\nHTTP REST" as IAuth
 
-component "**Gateway**\nExpress + Socket.io\nJWT verify (local, con JWT_SECRET)\nRate limiting · /health · /kpis" as Gateway #Wheat
+component "**Gateway**\nExpress + Socket.io\nJWT verify (local)\nRate limiting · /health · /kpis" as Gateway #Wheat
 component "**Auth Service**\nGoogle OAuth → JWT\nPOST /auth/google · GET /health" as Auth #LightGray
 
 Jugador -down-> IGateway
@@ -57,58 +57,75 @@ IGateway - Gateway
 Jugador ..> IAuth : POST /auth/google\n(solo al iniciar sesión)
 IAuth - Auth
 
-' ── Interfaz interna compartida — el "puerto" del Broker ─────────────────────
-interface "**:6379 TLS**\nRedis Pub/Sub\n(Upstash)" as IBroker
+' ── Infraestructura interna ───────────────────────────────────────────────────
+database "**Redis State**\n(Upstash)\nsala:{codigo} · chat\nenergia · locks · KPIs\nratelimit · timer:leader" as Redis #LightBlue
+
+component "**Kafka Bus**\n(Upstash Kafka)\ncmd.room · cmd.game · cmd.chat\ngw.broadcast\nevt.room · evt.game\nevt.timer · evt.bot · evt.chat" as Kafka #LightGreen
 
 package "②  EVENT-DRIVEN — ningún servicio llama directamente a otro" as EventZone #Lavender {
-  component "**Message Broker**\nRedis Pub/Sub\nsvc:room · svc:game · svc:chat\ngw:broadcast · evt:*" as Broker #LightGreen
-  component "Observability\n(consume todos\nlos evt:*)" as Obs #LightGray
-  Broker .down.> Obs : consume **todos** los eventos
+  component "Observability\n(consume todos\nlos evt.*)" as Obs #LightGray
+  Kafka .down.> Obs : consume **todos** los eventos evt.*
 }
 
-Broker -- IBroker
-
-package "①  MICROSERVICIOS — sin puertos HTTP/WS, se conectan todos a :6379" as Micro {
-
-  package "**Room Service** — ③ Domain Kernel" as RoomBox #LightYellow {
-    rectangle "**Handlers**\nhandleCreate · handleJoin\nhandleDisconnect\nleen/escriben Redis · publican eventos" as RoomH #LightBlue
-    rectangle "**Dominio puro**\ncrearSala · agregarJugador\nmarcarDesconectado · estaLlena\ncalcularEquipos — 0 dependencias" as RoomD #LightGreen
-    RoomH -down-> RoomD : llama funciones puras\n(sin lógica propia)
-  }
+package "①  MICROSERVICIOS — sin puertos HTTP/WS" as Micro {
 
   package "**Game Service** — ③ Domain Kernel" as GameBox #LightYellow {
-    rectangle "**Handlers**\nhandleShot · handlePower · handleSalvo\nhandlePlaceShips · handleDisconnect\nleen/escriben Redis · publican eventos" as GameH #LightBlue
+    rectangle "**Handlers**\nhandleShot · handlePower · handleSalvo\nhandlePlaceShips · handleDisconnect\nleen/escriben Redis State · publican Kafka" as GameH #LightBlue
     rectangle "**Dominio puro**\nGameEngine · Board · Fleet\nPowers · Salvo · Countermeasure\n0 dependencias externas" as GameD #LightGreen
     GameH -down-> GameD : llama funciones puras\n(sin lógica propia)
   }
 
   rectangle "Timer Service\nleader election SETNX · tick 100ms" as Timer #LightGray
-  rectangle "Chat Service\npersiste últimos 100 mensajes" as Chat #LightGray
-  rectangle "Bot Service\nconsume ShotFired · decide disparo" as Bot #LightGray
+  rectangle "Chat Service\npersiste últimos 100 mensajes\nen Redis State" as Chat #LightGray
+  rectangle "Bot Service\nconsume evt.game · decide disparo" as Bot #LightGray
+  rectangle "Room Service\ngestiona sala:{codigo}\nen Redis State" as Room #LightGray
 }
 
-database "**Redis State**\nsala:{codigo} · chat · energía\nlocks SETNX · KPIs" as Redis
-
-' ── Todos los servicios REQUIEREN la interfaz :6379 ──────────────────────────
-Gateway  ..> IBroker : publish svc:room / svc:game / svc:chat\nsubscribe gw:broadcast · evt:TimerTick · evt:PhaseChanged
-Auth     ..> IBroker : ping (GET /health)
-RoomBox  ..> IBroker : subscribe svc:room\npublish gw:broadcast · evt:RoomReady · evt:RoomDestroyed
-GameBox  ..> IBroker : subscribe svc:game · evt:RoomReady · evt:TimerEnd\npublish gw:broadcast · evt:ShotFired · evt:PhaseChanged
-Timer    ..> IBroker : subscribe evt:RoomReady · evt:PhaseChanged\npublish evt:TimerTick · evt:TimerEnd
-Chat     ..> IBroker : subscribe svc:chat\npublish evt:ChatMessage
-Bot      ..> IBroker : subscribe evt:ShotFired\npublish evt:BotDecision
-Obs      ..> IBroker : subscribe evt:* (todos)
-
-' ── Redis State (lectura/escritura directa, separado del Pub/Sub) ─────────────
-Micro    -[#blue]-> Redis : leen / escriben estado compartido
-Gateway  -[#blue]-> Redis : reconexión · /kpis
+' ── Conexiones a Redis State ──────────────────────────────────────────────────
+Gateway  -[#blue]-> Redis : ratelimit · reconexión · /kpis
 Auth     -[#blue]-> Redis : ping (GET /health)
+Room     -[#blue]-> Redis : sala:{codigo} get/set
+GameBox  -[#blue]-> Redis : sala:{codigo} · energia\nSETNX (lock salva)
+Timer    -[#blue]-> Redis : timer:leader (SETNX hb)
+Chat     -[#blue]-> Redis : sala:{codigo}:chat LPUSH/LTRIM
+Obs      -[#blue]-> Redis : stats:kpi:* HSET
 
-note right of IBroker
-  Todos los servicios
-  **requieren** esta interfaz.
-  Es el único canal de
-  comunicación entre ellos.
+' ── Conexiones a Kafka Bus ────────────────────────────────────────────────────
+Gateway  ..> Kafka : produce cmd.room · cmd.game · cmd.chat\nevt.room (PlayerReconnected)
+Kafka    ..> Gateway : consume gw.broadcast\nevt.timer (TimerTick) · evt.game (PhaseChanged)
+
+Kafka    ..> Room    : consume cmd.room
+Room     ..> Kafka   : produce gw.broadcast · evt.room
+
+Kafka    ..> GameBox : consume cmd.game · evt.room\nevt.timer (TimerEnd) · evt.bot
+GameBox  ..> Kafka   : produce gw.broadcast · evt.game
+
+Kafka    ..> Timer   : consume evt.room (RoomReady)\nevt.game (PhaseChanged · GameEnded)
+Timer    ..> Kafka   : produce evt.timer (TimerTick · TimerEnd)
+
+Kafka    ..> Chat    : consume cmd.chat · evt.room (PlayerRoomJoined)
+Chat     ..> Kafka   : produce gw.broadcast · evt.chat
+
+Kafka    ..> Bot     : consume evt.game (ShotFired)
+Bot      ..> Kafka   : produce evt.bot (BotDecision)
+
+note right of Redis
+  Única fuente de verdad
+  del estado de la partida.
+  Ningún cliente escribe
+  aquí directamente.
+  **Operaciones atómicas:**
+  INCRBY (energía)
+  SETNX (lock salva)
+  LPUSH/LTRIM (chat)
+end note
+
+note right of Kafka
+  Bus de mensajes persistente.
+  Si un servicio cae y reinicia,
+  puede releer mensajes perdidos.
+  Partición por `codigo` de sala
+  garantiza orden por partida.
 end note
 
 note right of Gateway
@@ -118,18 +135,13 @@ note right of Gateway
   para verificar conexiones.
 end note
 
-note bottom of Redis
-  Única fuente de verdad.
-  Ningún cliente escribe
-  aquí directamente.
-end note
-
 legend bottom center
-  <b>Notación de interfaces:</b>
-  Círculo con línea sólida (<b>--</b>) = el componente <b>provee</b> esa interfaz.
-  Flecha punteada al círculo (<b>..></b>) = el componente <b>requiere</b> esa interfaz.
-  :3000 y :3001 = interfaces públicas (cliente externo). :6379 = interfaz interna compartida (todos los servicios).
-  <b>①</b> Microservicios independientes. <b>②</b> Event-Driven vía Broker. <b>③</b> Domain Kernel en Room y Game.
+  <b>Separación de responsabilidades entre Redis y Kafka:</b>
+  Redis State = lectura/escritura de datos de partida (sub-ms, atómico).
+  Kafka Bus   = comunicación entre servicios (persistente, con replay, consumer groups).
+  Si Kafka cae: el estado de la partida se conserva en Redis; los servicios pueden reconectar.
+  Si Redis cae: Kafka registra los eventos pendientes para replay cuando Redis vuelva.
+  <b>①</b> Microservicios independientes. <b>②</b> Event-Driven vía Kafka. <b>③</b> Domain Kernel en Game Service.
 end legend
 
 @enduml

@@ -2,17 +2,17 @@
 
 ## ¿Qué hace este servicio?
 Implementa la IA del oponente para el modo `1v1-Bot`. Observa los eventos del juego
-(`evt:ShotFired`, `evt:GameStarted`) para determinar cuándo le toca "disparar",
-calcula la celda objetivo usando una estrategia de IA (hunt & target), y publica
-`evt:BotDecision` para que Game Service procese el disparo como si fuera un jugador humano.
+en Kafka para determinar cuándo le toca "disparar", calcula la celda objetivo y publica
+`BotDecision` en `evt.bot` para que Game Service lo procese igual que un disparo humano.
 
-**Regla de oro:** el bot NO tiene estado propio más allá de lo que lee de Redis.
-Game Service es quien valida y aplica el disparo del bot, igual que con humanos.
+**Regla de oro:** el bot NO escribe en Redis State. Solo consume Kafka y produce Kafka.
+Game Service es quien valida y aplica el disparo del bot.
 
 ## Puerto y protocolo
 - **HTTP:** ninguno
-- **Protocolo:** Redis Pub/Sub exclusivamente
-- Requiere **2 conexiones Redis**: `redis` (comandos/publish) y `sub` (suscripciones)
+- **Mensajería:** Kafka (consume `evt.game`, produce `evt.bot`)
+- **Estado:** ninguno — stateless
+- **1 cliente Kafka** (producer + consumer)
 
 ## Scaffolding completo
 
@@ -24,73 +24,48 @@ battlecaos-bot/
 ├── package.json
 ├── CLAUDE.md
 └── src/
-    ├── index.js        ← suscripción + broker
-    ├── redis.js        ← fábrica createRedis()
-    ├── logger.js       ← logger con prefijo [bot]
+    ├── index.js        ← consumer Kafka + lógica de decisión
+    ├── kafka.js        ← fábrica producer + createConsumer
+    ├── logger.js       ← logger [bot]
     └── strategy.js     ← lógica de IA: hunt & target
 ```
 
 ## Variables de entorno
 
 ```env
-# .env.example
-REDIS_URL=redis://localhost:6379
+# Kafka
+KAFKA_BROKER=localhost:9092
+KAFKA_CLIENT_ID=battlecaos-bot
+# KAFKA_USERNAME=
+# KAFKA_PASSWORD=
 BOT_DELAY_MS=800
 ```
 
-`BOT_DELAY_MS`: retraso artificial antes de disparar (simula "pensar").
-Valor recomendado: 500–1500 ms para que parezca natural.
+`BOT_DELAY_MS`: retraso artificial antes de disparar. Valor recomendado: 500–1500ms.
 
-## package.json
+## Kafka
 
-```json
-{
-  "name": "battlecaos-bot",
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "start": "node src/index.js",
-    "dev":   "node --watch src/index.js"
-  },
-  "dependencies": {
-    "dotenv":   "^16.4.0",
-    "ioredis":  "^5.5.0"
-  }
-}
-```
+### Consume de:
+| Topic | Tipo | Acción |
+|---|---|---|
+| `evt.game` | `ShotFired` | Si modo bot y turno del bot, decidir y disparar |
+| `evt.game` | `GameEnded` | Limpiar estado interno de la sala |
 
-## Canales Redis
+### Produce en:
+| Topic | Tipo | Cuándo |
+|---|---|---|
+| `evt.bot` | `BotDecision` | Disparo elegido (Game Service lo consume como disparo normal) |
 
-### Suscribe a:
-| Canal | Qué hace |
-|---|---|
-| `evt:GameStarted` | Registra qué salas en modo bot deben ser gestionadas |
-| `evt:ShotFired` | Si fue turno del humano, el bot calcula y publica su disparo |
-| `evt:GameEnded` | Limpia estado interno de la sala |
-
-### Publica en:
-| Canal | Cuándo |
-|---|---|
-| `evt:BotDecision` | Disparo elegido por la IA (Game Service lo consume como disparo normal) |
-
-## Formato de `evt:BotDecision`
+## Formato de `BotDecision`
 
 ```json
 {
   "type": "BotDecision",
   "source": "bot",
   "timestamp": 1234567890,
-  "data": {
-    "codigo": "123456",
-    "playerId": "bot-player-id",
-    "x": 3,
-    "y": 7
-  }
+  "data": { "codigo": "123456", "playerId": "bot-player-id", "x": 3, "y": 7 }
 }
 ```
-
-El `playerId` del bot se almacena en la sala cuando se crea en modo `1v1-Bot`.
-El bot tiene un ID fijo como `bot-{codigo}` o similar.
 
 ## Estrategia de IA: Hunt & Target
 
@@ -124,60 +99,23 @@ export function decideShot(shotHistory, lastHit) {
 ## Retraso artificial
 
 ```js
-// En el handler de evt:ShotFired, tras determinar que es turno del bot:
 const delay = parseInt(process.env.BOT_DELAY_MS ?? '800');
 setTimeout(async () => {
   const [x, y] = decideShot(shotHistory, lastHit);
-  await redis.publish('evt:BotDecision', JSON.stringify({
+  await producer.send({ topic: 'evt.bot', messages: [{ key: codigo, value: JSON.stringify({
     type: 'BotDecision', source: 'bot', timestamp: Date.now(),
     data: { codigo, playerId: botId, x, y },
-  }));
+  })}]});
 }, delay);
 ```
 
-## Sistema de logs
+## Tareas pendientes
 
-```js
-// src/logger.js
-const SVC = 'bot';
-export const log = {
-  info:  (...a) => console.log( `[${SVC}]`, ...a),
-  warn:  (...a) => console.warn( `[${SVC}] WARN:`, ...a),
-  error: (...a) => console.error(`[${SVC}] ERROR:`, ...a),
-};
-```
-
-Uso esperado:
-```
-[bot] suscrito a evt:GameStarted, evt:ShotFired
-[bot] sala 123456 — modo bot activo (playerId: bot-123456)
-[bot] sala 123456 — pensando... (800ms)
-[bot] sala 123456 — disparo en (3,7): modo hunt
-[bot] sala 123456 — disparo en (4,7): modo target (hit anterior en 3,7)
-[bot] sala 123456 — partida terminada, limpiando estado
-```
-
-## Testing
-Verificación manual:
-
-```bash
-# Publicar GameStarted con modo bot
-redis-cli PUBLISH evt:GameStarted '{"type":"GameStarted","data":{"codigo":"123456","modo":"1v1-bot","jugadores":[{"id":"uid-A","equipo":"A"},{"id":"bot-123456","equipo":"B","esBot":true}]}}'
-
-# Publicar ShotFired del jugador humano (turno pasa al bot)
-redis-cli PUBLISH evt:ShotFired '{"type":"ShotFired","data":{"codigo":"123456","playerId":"uid-A","x":0,"y":0,"result":"miss"}}'
-
-# Escuchar decisión del bot (después de BOT_DELAY_MS)
-redis-cli SUBSCRIBE evt:BotDecision
-```
-
-## Tareas pendientes (de Orden_de_Ejecucion.md)
-
-| ID | Descripción | Sprint |
-|---|---|---|
-| DOMF001 | Inicialización base + dos conexiones Redis | 1 - Fase 0 |
-| DOMF1101 | Estrategia Hunt & Target + retraso artificial | 2 - Fase 3 |
-| DOMF1102 | Publicar evt:BotDecision en turno correcto | 2 - Fase 3 |
+| ID | Descripción |
+|---|---|
+| DOMF001 | Init + Kafka |
+| DOMF1101 | Consumer evt.game (ShotFired) + estrategia Hunt & Target |
+| DOMF1102 | Produce BotDecision en evt.bot |
 
 ## Arranque
 
