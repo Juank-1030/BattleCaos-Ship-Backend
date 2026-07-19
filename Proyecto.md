@@ -970,7 +970,7 @@ A continuación se evalúa la arquitectura híbrida contra cada atributo de cali
 - *Artefacto:* Sistema (Game Service + Redis)
 - *Entorno:* Operación normal, pico de 100 partidas concurrentes
 - *Respuesta:* Disparo procesado y broadcast a todos los jugadores
-- *Métrica:* Latencia promedio < 200ms | Cadencia de salva de 1.5s mantenida
+- *Métrica:* Latencia promedio < 200ms | Cadencia de salva de 0.5s mantenida
 
 **Estimación de latencia por disparo:**
 | Paso | Tiempo |
@@ -986,7 +986,7 @@ A continuación se evalúa la arquitectura híbrida contra cada atributo de cali
 | Game Service: broadcast state | 5ms |
 | **Total estimado** | **~40ms** |
 
-La salva simultánea requiere cadencia de 1.5s entre disparos. Con 40ms de latencia, caben cómodamente ~37 disparos por jugador en la ventana de 8s.
+La salva simultánea requiere cadencia de 0.5s entre disparos. Con 40ms de latencia, caben cómodamente ~16 disparos por jugador en la ventana de 8s.
 
 ---
 

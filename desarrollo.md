@@ -188,7 +188,7 @@ Salva Simultánea Evento simultáneo
 ```
 ```
 Ventana de 8 s sin turnos: todos disparan a la
-vez, con cadencia de 1 disparo cada 1.5 s
+vez, con cadencia de 1 disparo cada 0.5 s
 controlada por el servidor.
 ```
 ```
@@ -223,7 +223,7 @@ La Salva Simultánea
 
 Cada cierto número de rondas, el servidor pausa el sistema de turnos y anuncia una ventana de
 Salva de 8 segundos. Durante ese lapso, todos los jugadores disparan libremente, pero cada uno
-con una cadencia máxima de un disparo cada 1.5 segundos. Esta cadencia es deliberada: evita
+con una cadencia máxima de un disparo cada 0.5 segundos. Esta cadencia es deliberada: evita
 que el resultado dependa de la velocidad de clic, el hardware o la latencia de cada jugador, y
 desplaza el peso de la mecánica hacia la decisión de dónde disparar. El servidor recibe una
 ráfaga de disparos concurrentes de todos los clientes, los serializa en su cola de eventos, valida
@@ -239,9 +239,15 @@ ventana de 5 segundos durante la cual el equipo defensor puede hacer clic en un 
 Contramedida para anular el poder. Esta ventana cierra en tres escenarios: (1) al pasar los 5
 segundos, (2) si el equipo defensor hace clic con éxito en Contramedida, o (3) si el equipo
 defensor no reacciona. En todos los casos, el turno del equipo atacante termina normalmente y
-pasa al siguiente jugador en rotación. Si la Contramedida se activa a tiempo, el poder se anula y
-el atacante recupera su energía gastada. Si no, el poder se resuelve según lo normal. El servidor
-es el único árbitro del tiempo: los 5 segundos viven en el servidor, no en los clientes.
+pasa al siguiente jugador en rotación. Si la Contramedida se activa a tiempo, el poder se anula,
+pero el atacante **no** recupera su energía gastada — el costo ya se descontó al activar el poder
+y se pierde igual, precisamente para que la Contramedida no sea gratis de bloquear. Si no se
+activa, el poder se resuelve según lo normal. El servidor es el único árbitro del tiempo: los 5
+segundos viven en el servidor, no en los clientes.
+
+> Nota (2026-07-04): esta sección contradecía a `Orden_de_Ejecucion.md` (DOMF901), que es el
+> documento que se siguió al construir `battlecaos-game`. Se corrigió aquí para que ambos
+> documentos digan lo mismo — la regla implementada es la de no devolver energía.
 
 4.5 Escalabilidad horizontal (post-MVP)
 
