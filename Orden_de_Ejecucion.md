@@ -2,7 +2,7 @@
 
 Orden basado en dependencias entre historias de usuario. Cada fase requiere que la anterior esté completada.
 
-**Total: 33 historias de usuario | 51 tareas técnicas**
+**Total: 34 historias de usuario | 55 tareas técnicas** (incluye Historia 25bis / DOMF1204-1207, observabilidad de infraestructura, agregada 2026-07-04 a partir de `Guia_Observabilidad.md`)
 
 ---
 
@@ -2666,6 +2666,12 @@ app.get('/health', async (_req, res) => {
 
 ##### Tarea: DOMF1303 — Timer Service: elección de líder, heartbeat y gestión de temporizadores
 
+**Estado:** ✅ Completado (2026-07-05) — implementado como `TimerManager.js` (start/stop/pause/resume
+por sala) + leader election en `index.js`. Pausa/reanuda el timer activo ante
+`PlayerDisconnectedFromRoom`/`PlayerReconnected` (no estaba en el scaffolding original de este
+documento, pero sí en `CLAUDE.timer.md`). Verificado en vivo con Redis+Kafka reales, junto con
+`battlecaos-game` corriendo a la vez. 11 tests con fake timers, 97.87% cobertura.
+
 **Microservicio:** `battlecaos-timer` → `src/index.js`
 
 **Qué hace:** Implementa leader election con `SETNX` + TTL=1s y heartbeat cada 500ms. El líder activo ejecuta los timers de cada fase y publica `TimerTick` cada 100ms y `TimerEnd` al expirar.
@@ -2766,6 +2772,96 @@ console.log(`[timer] ${ME} iniciado`);
 ```
 
 > **Failover:** Si el líder muere, su TTL expira en 1s. Otra instancia hace `SETNX` en el siguiente heartbeat (500ms) y se convierte en líder. El failover total es ~1.5s.
+
+---
+
+### Fase 5.5: Observabilidad de Infraestructura (métricas, logs, dashboards)
+
+> Distinta de la Fase 6 (DOMF1201-1203): estas tareas instrumentan los servicios existentes con
+> métricas técnicas (Prometheus/Grafana/Loki) y no dependen de que todos los eventos de dominio
+> existan. Por eso pueden ejecutarse ahora, en paralelo con el resto del desarrollo, en vez de
+> esperar al cierre del proyecto. Se derivan del reto final de `Guia_Observabilidad.md`.
+
+---
+
+#### Historia 25bis — DOMH14bis: Visibilidad técnica de cada microservicio
+
+---
+
+##### Tarea: DOMF1204 — Instrumentación Prometheus (`/metrics`) en servicios HTTP
+
+**Microservicio:** `battlecaos-auth`, `battlecaos-gateway` (ambos con servidor HTTP) — pendiente extender a `battlecaos-room`/`battlecaos-game` cuando se les agregue un puerto HTTP mínimo.
+
+**Estado:** ✅ Completado en `auth` y `gateway` (2026-07-04, verificado en vivo con Redis/Kafka reales).
+
+**Qué hace:** Expone `GET /metrics` en formato Prometheus usando `prom-client`: métricas por defecto (CPU, memoria, event loop lag), histograma `http_server_requests_seconds` por ruta/método/status, y contadores de negocio propios de cada servicio (`auth_login_success_total`/`auth_login_failed_total` en auth; `gateway_socket_connections_total`, `gateway_events_routed_total{event}`, `gateway_rate_limit_exceeded_total`, `gateway_reconnections_total`, `gateway_kafka_consumer_crash_total`, `gateway_active_sockets` en gateway).
+
+**Scaffolding:**
+```
+battlecaos-auth/src/metrics.js
+battlecaos-auth/src/httpMetricsMiddleware.js
+battlecaos-gateway/src/metrics.js
+battlecaos-gateway/src/httpMetricsMiddleware.js
+```
+
+**Dependencias npm:** `prom-client` (agregada a ambos `package.json`)
+
+**Verificación:**
+```bash
+curl http://localhost:3001/metrics   # auth
+curl http://localhost:3000/metrics   # gateway
+```
+
+---
+
+##### Tarea: DOMF1205 — Stack local de observabilidad (Prometheus + Grafana + Loki + Promtail)
+
+**Microservicio:** Ninguno — es tooling de desarrollo local, vive en el `docker-compose.yml` de la raíz del workspace (`E:\ARSW\Proyecto`), **no dentro de ningún repo de microservicio**.
+
+**Estado:** ⏳ Pendiente (diseño completo en `Item31_Propuesta_Observabilidad.md`, contenedores aún no agregados al compose).
+
+**Qué hace:** Levanta Prometheus (scrapea `/metrics` de auth y gateway), Grafana (dashboards + alertas) y Loki+Promtail (logs) como contenedores adicionales junto a Redis/Kafka, para cumplir el reto de `Guia_Observabilidad.md` con evidencia real (targets, dashboard, incidente simulado).
+
+**Scaffolding:**
+```
+observability/prometheus.yml
+observability/loki-config.yml
+observability/promtail-config.yml
+```
+
+**Verificación:** `http://localhost:9090/targets` en estado `UP` para `battlecaos-auth` y `battlecaos-gateway`.
+
+---
+
+##### Tarea: DOMF1206 — Logs deployment-proof con `pino-loki`
+
+**Microservicio:** `battlecaos-auth`, `battlecaos-gateway` (luego el resto de servicios con Pino)
+
+**Estado:** ⏳ Pendiente.
+
+**Qué hace:** Reemplaza el mecanismo de Promtail leyendo logs de contenedores Docker (solo funciona en local) por un transport `pino-loki` que empuja los logs por HTTP directo a un endpoint de Loki. Funciona igual en local (`http://loki:3100`) o en producción (endpoint de Grafana Cloud), sin depender de acceso al socket de Docker del host donde corra el servicio — necesario porque en Render (destino de despliegue real, ver hito 4 de `desarrollo.md`) no hay acceso a leer logs de contenedor desde afuera en el free tier.
+
+**Variables de entorno nuevas (opcionales — si no se definen, el logger se comporta exactamente igual que hoy):**
+```env
+LOKI_URL=            # ej. http://loki:3100 en local, o endpoint de Grafana Cloud en producción
+LOKI_BASIC_AUTH=     # solo si el endpoint de Loki lo requiere (Grafana Cloud sí)
+```
+
+**Verificación:** con `LOKI_URL` seteado, los logs aparecen en Grafana → Explore → Loki con el mismo contenido que en consola.
+
+---
+
+##### Tarea: DOMF1207 — Migración del stack de observabilidad a Grafana Cloud (hito de despliegue)
+
+**Microservicio:** Ninguno — configuración externa (cuenta Grafana Cloud) + variables de entorno en cada servicio ya desplegado a Render.
+
+**Estado:** ⏳ Pendiente — depende de que el despliegue a Render + Upstash (hito 4 de `desarrollo.md`) ya haya ocurrido. No tiene sentido antes.
+
+**Qué hace:** Sustituye el Prometheus/Loki auto-hospedado local por Grafana Cloud (free tier): Grafana queda con una URL fija y compartible, independiente de que el compose local esté corriendo. El scrape de `/metrics` puede seguir haciéndose desde el mismo Prometheus local (con un bloque `remote_write` apuntando a Grafana Cloud) o desde un agente ligero (Grafana Alloy). Los logs se resuelven solos porque DOMF1206 ya los empuja por HTTP, solo cambia el valor de `LOKI_URL`.
+
+**Por qué no auto-hospedar en Render:** el free tier de Render se duerme a los 15 min de inactividad (riesgo ya documentado en `desarrollo.md`); un Prometheus auto-hospedado ahí tendría el mismo problema. Grafana Cloud resuelve esto porque es el proveedor quien mantiene el almacenamiento siempre disponible.
+
+**Verificación:** dashboard de Grafana Cloud accesible por URL pública mostrando datos de los servicios desplegados en Render.
 
 ---
 

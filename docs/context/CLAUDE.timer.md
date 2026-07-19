@@ -50,6 +50,7 @@ KAFKA_CLIENT_ID=battlecaos-timer
 |---|---|---|
 | `evt.room` | `RoomReady` | Inicia timer COLOCACION (60s) |
 | `evt.game` | `PhaseChanged` | Resetea timer para nueva fase |
+| `evt.game` | `TurnStarted` | Reinicia el timer TURNO (30s) para el nuevo jugador activo — **agregado 2026-07-05**: un disparo normal rota de jugador sin cambiar de fase, así que `PhaseChanged` no alcanza para reiniciar el reloj cada turno (ver DOMF1301 en `BattleCaos-Ship_Inception.md`, que exige el límite "por turno", no uno solo para toda la fase) |
 | `evt.game` | `GameEnded` | Detiene y limpia timer de la sala |
 | `evt.room` | `PlayerDisconnectedFromRoom` | Pausa timer si aplica |
 | `evt.room` | `PlayerReconnected` | Reanuda timer |
@@ -99,20 +100,30 @@ Solo el leader ejecuta `startTimer()`. Failover en ~1.5s si el master muere.
 
 ## Formato de mensajes producidos
 
+> **Corrección (2026-07-05):** el campo es `tipo`, no `fase` — `battlecaos-game` (`broker.js`,
+> `handleTimerEnd`) ya lee `msg.data.tipo` (valores `'COLOCACION' | 'TURNO' | 'SALVA'`, distintos de
+> `sala.fase` que usa `'TURNOS'` en plural). Se implementó así para que coincida con el código
+> existente de `battlecaos-game`, que es quien consume estos eventos.
+
 ```json
 { "type": "TimerTick", "source": "timer", "timestamp": 1234,
-  "data": { "codigo": "123456", "fase": "TURNOS", "remaining": 18500 } }
+  "data": { "codigo": "123456", "tipo": "TURNO", "remaining": 18500 } }
 
 { "type": "TimerEnd", "source": "timer", "timestamp": 1234,
-  "data": { "codigo": "123456", "fase": "TURNOS" } }
+  "data": { "codigo": "123456", "tipo": "TURNO" } }
 ```
 
 ## Tareas pendientes
 
-| ID | Descripción |
-|---|---|
-| DOMF001 | Init + Redis + Kafka |
-| DOMF1303 | Timer de fases: TimerTick + TimerEnd + Leader Election |
+| ID | Descripción | Estado |
+|---|---|---|
+| DOMF001 | Init + Redis + Kafka | ✅ Completado (2026-07-05) |
+| DOMF1303 | Timer de fases: TimerTick + TimerEnd + Leader Election | ✅ Completado (2026-07-05) |
+
+Verificado en vivo con Redis + Kafka reales, junto con `battlecaos-game` corriendo simultáneamente:
+timer de Salva (8s) con ticks decrecientes y `TimerEnd` correcto, pausa/reanudación por
+desconexión/reconexión, y ambos servicios reaccionando sin conflicto al mismo `PhaseChanged`
+(idempotencia confirmada). 11 tests unitarios en `TimerManager.js` (97.87% cobertura).
 
 ## Arranque
 
