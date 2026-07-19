@@ -1,0 +1,184 @@
+@startuml 05-componentes-por-servicio
+
+title Componentes Internos de Cada Microservicio
+header Solo Gateway (:3000) y Auth (:3001) tienen puerto. Los demás son workers Kafka puros.
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 170
+skinparam nodesep 22
+skinparam ranksep 45
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+  FontSize 12
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+  FontSize 13
+}
+skinparam actor {
+  BorderColor Red
+}
+skinparam package {
+  BackgroundColor White
+  BorderColor Gray
+  FontSize 12
+}
+skinparam rectangle {
+  FontSize 11
+}
+skinparam interface {
+  BackgroundColor White
+  BorderColor #444444
+  FontSize 9
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 10
+}
+skinparam ArrowFontSize 10
+
+actor "Jugador" as Jugador
+
+' ===================== GATEWAY =====================
+interface "**:3000**\nHTTPS/WSS" as IGateway
+package "**Gateway**" as GatewayBox #Wheat {
+  rectangle "Express + Socket.io\n/health · /kpis" as GW1
+  rectangle "**JWT middleware**\njwt.verify(token, JWT_SECRET)\n→ sin llamar a Auth" as GW2
+  rectangle "Rate limiting\nRedis INCR · 20 req/s/IP" as GW3
+  rectangle "Enrutamiento\nROUTES → produce Kafka cmd.*" as GW4
+  rectangle "Reconexión\nlee Redis State · produce evt.room" as GW5
+  rectangle "**kafka.js**\nproducer + createConsumer" as GW6
+}
+Jugador -down-> IGateway
+IGateway - GatewayBox
+
+' ===================== AUTH =====================
+interface "**:3001**\nHTTP REST" as IAuth
+package "**Auth Service**" as AuthBox #LightCyan {
+  rectangle "POST /auth/google\nverifyGoogleToken(idToken)" as Auth1
+  rectangle "signToken(payload)\njwt.sign() · expira 24h" as Auth2
+  rectangle "GET /health\nping Redis State" as Auth3
+}
+AuthBox -- IAuth
+Jugador ..> IAuth : POST /auth/google
+
+note right of AuthBox
+  Auth no verifica tokens
+  en conexiones Socket.io.
+  Eso lo hace Gateway
+  localmente con JWT_SECRET.
+  No usa Kafka.
+end note
+
+' ===================== ROOM SERVICE =====================
+package "**Room Service**\n(sin puerto — consume cmd.room)" as RoomBox #LightGray {
+  rectangle "handleCreate · handleJoin\nhandleDisconnect\nlee/escribe Redis State\nproduce Kafka gw.broadcast + evt.room" as RH1
+  rectangle "**domain/room.js** (puro)\ncrearSala · agregarJugador\nmarcarDesconectado · estaLlena\n0 dependencias externas" as RD1
+  rectangle "**kafka.js**\nproducer + createConsumer" as RK1
+  RH1 -down-> RD1 : llama funciones puras
+}
+
+' ===================== TIMER SERVICE =====================
+package "**Timer Service**\n(sin puerto — consume evt.room, evt.game)" as TimerBox #LightCyan {
+  rectangle "Leader election\nSET NX EX + heartbeat 500ms\nen Redis State" as Timer1
+  rectangle "TimerManager\nMap<codigo, interval>\nCOLOCACION·TURNO·SALVA" as Timer2
+  rectangle "produce evt.timer\nTimerTick cada 100ms\nTimerEnd cuando expira" as Timer3
+  rectangle "**kafka.js**\nproducer + createConsumer" as TK1
+}
+
+' ===================== CHAT + BOT + OBS =====================
+together {
+  package "**Chat Service**\n(sin puerto — consume cmd.chat, evt.room)" as ChatBox #LightCyan {
+    rectangle "recibe chat:mensaje\nrutea equipo/global" as Chat1
+    rectangle "Redis State:\nsala:{codigo}:chat\nLPUSH · LTRIM 100" as Chat2
+    rectangle "produce gw.broadcast\n+ evt.chat" as Chat3
+  }
+
+  package "**Bot Service**\n(sin puerto — consume evt.game)" as BotBox #LightCyan {
+    rectangle "escucha ShotFired\n(modo 1v1-bot)" as Bot1
+    rectangle "decide disparo\n(aleatorio/minimax)" as Bot2
+    rectangle "produce evt.bot\nBotDecision" as Bot3
+  }
+
+  package "**Observability Service**\n(sin puerto — consume todos los evt.*)" as ObsBox #LightCyan {
+    rectangle "consume evt.room · evt.game\nevt.timer · evt.chat · evt.bot" as Obs1
+    rectangle "escribe KPIs en\nRedis State (HSET)\nstats:kpi:{fecha}" as Obs2
+  }
+}
+
+' ===================== GAME SERVICE — Domain Kernel =====================
+package "**Game Service** — Domain Kernel\n(sin puerto — consume cmd.game, evt.room, evt.timer, evt.bot)" as GameBox #LightYellow {
+
+  package "Handlers (orquestación: Redis State + Kafka)" as GameHandlers #LightBlue {
+    rectangle "handleShot.js" as H1
+    rectangle "handlePower.js" as H2
+    rectangle "handleSalvo.js\n(SETNX Redis por casilla)" as H3
+    rectangle "handlePlaceShips.js" as H4
+    rectangle "handleDisconnect.js /\nhandleReconnect.js" as H5
+    rectangle "broker.js\n(enruta mensajes Kafka)" as H6
+    rectangle "**kafka.js**\nproducer + createConsumer" as HK1
+  }
+
+  package "Dominio puro (0 dependencias)" as GameDomain #LightGreen {
+    rectangle "GameEngine · errors" as D1
+    rectangle "Board · Fleet" as D2
+    rectangle "Powers · Energy" as D3
+    rectangle "Salvo\n(núcleo de concurrencia)" as D4
+    rectangle "Countermeasure" as D5
+  }
+
+  GameHandlers -down-> GameDomain : llaman funciones puras\n(sin lógica de negocio propia)
+}
+
+' ===================== INFRAESTRUCTURA =====================
+component "**Kafka Bus**\n(Upstash Kafka)\ncmd.room · cmd.game · cmd.chat\ngw.broadcast\nevt.room · evt.game · evt.timer\nevt.bot · evt.chat" as KafkaBus #Lavender
+
+database "**Redis State**\n(Upstash Redis)\nsala:{codigo} · chat\nenergia · locks · KPIs\nratelimit · timer:leader" as Redis #LightBlue
+
+' ===================== Conexiones Kafka =====================
+GatewayBox -down-> KafkaBus : produce cmd.room · cmd.game\ncmd.chat · evt.room (PlayerReconnected)
+KafkaBus .up.> GatewayBox : consume gw.broadcast\nevt.timer (TimerTick) · evt.game (PhaseChanged)
+
+RoomBox -down-> KafkaBus : produce gw.broadcast · evt.room
+KafkaBus .right.> RoomBox : consume cmd.room
+
+GameBox -down-> KafkaBus : produce gw.broadcast · evt.game
+KafkaBus .right.> GameBox : consume cmd.game · evt.room\nevt.timer (TimerEnd) · evt.bot
+
+TimerBox -down-> KafkaBus : produce evt.timer
+KafkaBus .right.> TimerBox : consume evt.room (RoomReady)\nevt.game (PhaseChanged · GameEnded)
+
+ChatBox -down-> KafkaBus : produce gw.broadcast · evt.chat
+KafkaBus .right.> ChatBox : consume cmd.chat\nevt.room (PlayerRoomJoined)
+
+BotBox -down-> KafkaBus : produce evt.bot
+KafkaBus .right.> BotBox : consume evt.game (ShotFired)
+
+KafkaBus .down.> ObsBox : consume todos los eventos evt.*
+
+' ===================== Conexiones Redis State =====================
+GatewayBox -[#blue]-> Redis : ratelimit · sala:* (reconexión) · stats:kpi
+RoomBox    -[#blue]-> Redis : sala:{codigo} get/set
+GameBox    -[#blue]-> Redis : sala:{codigo} · energia\nSETNX (lock salva)
+TimerBox   -[#blue]-> Redis : timer:leader (SETNX hb)
+ChatBox    -[#blue]-> Redis : sala:{codigo}:chat LPUSH/LTRIM
+ObsBox     -[#blue]-> Redis : stats:kpi HSET
+AuthBox    -[#blue]-> Redis : ping (GET /health)
+
+legend bottom center
+  <b>Notación:</b>
+  Interfaz (círculo) = puerto público. Solo existen :3000 (Gateway) y :3001 (Auth).
+  Room / Game / Chat / Timer / Bot / Observability: sin puerto — workers Kafka puros.
+  Flechas sólidas azules = Redis State (GET/SET/INCR/SETNX — síncronos y atómicos).
+  Flechas punteadas = Kafka (produce/consume — asíncronos y persistentes).
+  Fondo amarillo = Domain Kernel (Handlers + Dominio puro sin dependencias externas).
+  <b>Separación de responsabilidades: Redis para estado, Kafka para mensajería.</b>
+end legend
+
+@enduml

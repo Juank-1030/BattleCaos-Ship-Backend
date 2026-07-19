@@ -1,0 +1,147 @@
+@startuml 02-vision-general-arquitectura
+
+title Visión General — Microservicios + Event-Driven + Domain Kernel
+header Interfaces públicas: :3000 (Gateway) y :3001 (Auth). Infraestructura interna: Redis State + Kafka Bus.
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 180
+skinparam nodesep 30
+skinparam ranksep 55
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam component {
+  BackgroundColor LightGray
+  BorderColor Black
+  FontSize 13
+}
+skinparam database {
+  BackgroundColor LightBlue
+  BorderColor Blue
+  FontSize 14
+}
+skinparam actor {
+  BorderColor Red
+}
+skinparam package {
+  BackgroundColor White
+  BorderColor Gray
+  FontSize 13
+}
+skinparam rectangle {
+  FontSize 12
+}
+skinparam interface {
+  BackgroundColor White
+  BorderColor #444444
+  FontSize 10
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 11
+}
+skinparam ArrowFontSize 11
+
+actor "Jugador" as Jugador
+
+' ── Interfaces públicas ────────────────────────────────────────────────────────
+interface "**:3000**\nHTTPS / WSS" as IGateway
+interface "**:3001**\nHTTP REST" as IAuth
+
+component "**Gateway**\nExpress + Socket.io\nJWT verify (local)\nRate limiting · /health · /kpis" as Gateway #Wheat
+component "**Auth Service**\nGoogle OAuth → JWT\nPOST /auth/google · GET /health" as Auth #LightGray
+
+Jugador -down-> IGateway
+IGateway - Gateway
+Jugador ..> IAuth : POST /auth/google\n(solo al iniciar sesión)
+IAuth - Auth
+
+' ── Infraestructura interna ───────────────────────────────────────────────────
+database "**Redis State**\n(Upstash)\nsala:{codigo} · chat\nenergia · locks · KPIs\nratelimit · timer:leader" as Redis #LightBlue
+
+component "**Kafka Bus**\n(Upstash Kafka)\ncmd.room · cmd.game · cmd.chat\ngw.broadcast\nevt.room · evt.game\nevt.timer · evt.bot · evt.chat" as Kafka #LightGreen
+
+package "②  EVENT-DRIVEN — ningún servicio llama directamente a otro" as EventZone #Lavender {
+  component "Observability\n(consume todos\nlos evt.*)" as Obs #LightGray
+  Kafka .down.> Obs : consume **todos** los eventos evt.*
+}
+
+package "①  MICROSERVICIOS — sin puertos HTTP/WS" as Micro {
+
+  package "**Game Service** — ③ Domain Kernel" as GameBox #LightYellow {
+    rectangle "**Handlers**\nhandleShot · handlePower · handleSalvo\nhandlePlaceShips · handleDisconnect\nleen/escriben Redis State · publican Kafka" as GameH #LightBlue
+    rectangle "**Dominio puro**\nGameEngine · Board · Fleet\nPowers · Salvo · Countermeasure\n0 dependencias externas" as GameD #LightGreen
+    GameH -down-> GameD : llama funciones puras\n(sin lógica propia)
+  }
+
+  rectangle "Timer Service\nleader election SETNX · tick 100ms" as Timer #LightGray
+  rectangle "Chat Service\npersiste últimos 100 mensajes\nen Redis State" as Chat #LightGray
+  rectangle "Bot Service\nconsume evt.game · decide disparo" as Bot #LightGray
+  rectangle "Room Service\ngestiona sala:{codigo}\nen Redis State" as Room #LightGray
+}
+
+' ── Conexiones a Redis State ──────────────────────────────────────────────────
+Gateway  -[#blue]-> Redis : ratelimit · reconexión · /kpis
+Auth     -[#blue]-> Redis : ping (GET /health)
+Room     -[#blue]-> Redis : sala:{codigo} get/set
+GameBox  -[#blue]-> Redis : sala:{codigo} · energia\nSETNX (lock salva)
+Timer    -[#blue]-> Redis : timer:leader (SETNX hb)
+Chat     -[#blue]-> Redis : sala:{codigo}:chat LPUSH/LTRIM
+Obs      -[#blue]-> Redis : stats:kpi:* HSET
+
+' ── Conexiones a Kafka Bus ────────────────────────────────────────────────────
+Gateway  ..> Kafka : produce cmd.room · cmd.game · cmd.chat\nevt.room (PlayerReconnected)
+Kafka    ..> Gateway : consume gw.broadcast\nevt.timer (TimerTick) · evt.game (PhaseChanged)
+
+Kafka    ..> Room    : consume cmd.room
+Room     ..> Kafka   : produce gw.broadcast · evt.room
+
+Kafka    ..> GameBox : consume cmd.game · evt.room\nevt.timer (TimerEnd) · evt.bot
+GameBox  ..> Kafka   : produce gw.broadcast · evt.game
+
+Kafka    ..> Timer   : consume evt.room (RoomReady)\nevt.game (PhaseChanged · GameEnded)
+Timer    ..> Kafka   : produce evt.timer (TimerTick · TimerEnd)
+
+Kafka    ..> Chat    : consume cmd.chat · evt.room (PlayerRoomJoined)
+Chat     ..> Kafka   : produce gw.broadcast · evt.chat
+
+Kafka    ..> Bot     : consume evt.game (ShotFired)
+Bot      ..> Kafka   : produce evt.bot (BotDecision)
+
+note right of Redis
+  Única fuente de verdad
+  del estado de la partida.
+  Ningún cliente escribe
+  aquí directamente.
+  **Operaciones atómicas:**
+  INCRBY (energía)
+  SETNX (lock salva)
+  LPUSH/LTRIM (chat)
+end note
+
+note right of Kafka
+  Bus de mensajes persistente.
+  Si un servicio cae y reinicia,
+  puede releer mensajes perdidos.
+  Partición por `codigo` de sala
+  garantiza orden por partida.
+end note
+
+note right of Gateway
+  JWT verificado **localmente**
+  con JWT_SECRET compartido.
+  Gateway nunca llama a Auth
+  para verificar conexiones.
+end note
+
+legend bottom center
+  <b>Separación de responsabilidades entre Redis y Kafka:</b>
+  Redis State = lectura/escritura de datos de partida (sub-ms, atómico).
+  Kafka Bus   = comunicación entre servicios (persistente, con replay, consumer groups).
+  Si Kafka cae: el estado de la partida se conserva en Redis; los servicios pueden reconectar.
+  Si Redis cae: Kafka registra los eventos pendientes para replay cuando Redis vuelva.
+  <b>①</b> Microservicios independientes. <b>②</b> Event-Driven vía Kafka. <b>③</b> Domain Kernel en Game Service.
+end legend
+
+@enduml

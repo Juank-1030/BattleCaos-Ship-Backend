@@ -1,0 +1,66 @@
+@startuml 01-arquitectura-tres-paradigmas
+
+title Arquitectura Híbrida — Tres Paradigmas que se Refuerzan Entre Sí
+
+!theme plain
+skinparam defaultFontName Consolas
+skinparam wrapWidth 180
+skinparam nodesep 40
+skinparam ranksep 60
+skinparam shadowing false
+skinparam roundCorner 12
+skinparam rectangle {
+  BackgroundColor White
+  BorderColor Black
+  FontSize 15
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 12
+}
+skinparam ArrowColor #333333
+skinparam ArrowFontSize 12
+
+' --- Declaración de las 3 capas (de arriba hacia abajo) ---
+rectangle "**MICROSERVICIOS**\nCada dominio (salas, juego, chat,\nbot, timer, auth, observabilidad)\nes desplegable y escalable\npor separado" as Micro #LightBlue
+
+rectangle "**EVENT-DRIVEN**\nLos servicios nunca se llaman\ndirectamente. Publican y\nconsumen eventos a través\nde Kafka (mensajería) y\nRedis (estado compartido)" as Event #LightGreen
+
+rectangle "**DOMAIN KERNEL**\nEl núcleo del juego (reglas\nde negocio) es puro, sin\ndependencias de Redis,\nKafka, Socket.io ni Express.\nHandlers delgados orquestan\nel acceso a Redis State" as Kernel #LightYellow
+
+' --- Por qué cada capa ---
+note right of Micro
+  **Por qué:** el Game Service necesita
+  escalar agresivamente; separarlo evita
+  arrastrar a Chat u Observability.
+end note
+
+note right of Event
+  **Por qué:** Kafka desacopla servicios críticos
+  (Game, Timer) de no críticos (Chat, Bot, Obs).
+  Si Chat cae, el juego sigue.
+  Redis separado evita el SPOF doble
+  (estado + mensajería en un solo nodo).
+end note
+
+note right of Kernel
+  **Por qué:** única forma de cumplir
+  Modificabilidad (EC-05) y probar el
+  núcleo de concurrencia sin infraestructura
+  — con menos capas que un Hexagonal clásico.
+end note
+
+' --- Relación entre capas ---
+Micro -down-> Event : **requiere**\nun mecanismo de comunicación que\nno acople un servicio a la dirección\nde red de otro
+Event -down-> Kernel : **exige**\nque el dominio que reacciona a un\nevento se pueda probar sin levantar\nel broker real
+Kernel .[#gray,dashed].> Micro : **cierra el ciclo:** un dominio sin dependencias\nde infraestructura se puede mover a su propio\nproceso sin reescribirlo (solo se reubica el handler)
+
+legend bottom center
+  <b>Si se quitara cualquiera de los tres, el resto pierde sentido:</b>
+  Microservicios sin Event-Driven = llamadas HTTP síncronas frágiles.
+  Domain Kernel sin Microservicios = sigue dando testeabilidad, pero no resuelve la escalabilidad independiente.
+  Redis State + Kafka Bus = elimina el SPOF de tener estado y mensajería en el mismo nodo.
+end legend
+
+@enduml

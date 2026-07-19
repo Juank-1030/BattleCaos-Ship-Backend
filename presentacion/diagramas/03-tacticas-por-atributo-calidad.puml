@@ -1,0 +1,79 @@
+@startuml 03-tacticas-por-atributo-calidad
+
+title Requisitos de Calidad Seleccionados → Táctica Arquitectónica Concreta
+
+!theme plain
+left to right direction
+skinparam defaultFontName Consolas
+skinparam wrapWidth 200
+skinparam nodesep 50
+skinparam ranksep 90
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam rectangle {
+  BackgroundColor White
+  BorderColor Black
+  FontSize 14
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 12
+}
+skinparam ArrowColor #333333
+
+rectangle "**Desempeño RT**\n(EC-01)" as Q0 #LightBlue
+rectangle "**Desempeño\nConcurrencia**\n(EC-02)" as Q1 #LightBlue
+rectangle "**Disponibilidad**\n(EC-03)" as Q2 #LightBlue
+rectangle "**Seguridad**\n(EC-04)" as Q3 #LightBlue
+rectangle "**Modificabilidad**\n(EC-05)" as Q5 #LightBlue
+rectangle "**Escalabilidad**\n(EC-06)" as Q4 #LightBlue
+
+rectangle "Kafka (mensajería) + Redis State (datos)\nLatencia estimada ~40ms por disparo\n(meta: P95 < 200ms)" as T0 #LightGreen
+rectangle "Locks atómicos en Redis State\n(SETNX) + control de cadencia\nKafka garantiza orden por partida\n(partición por codigo de sala)" as T1 #LightGreen
+rectangle "Estado en Redis State (independiente del bus)\nSi Kafka cae: estado se conserva en Redis\nSi Redis cae: Kafka tiene eventos para replay\ndesconexión ≠ abandono (conectado: false)" as T2 #LightGreen
+rectangle "JWT + Google OAuth\nverificado en cada conexión\nRate limiting 20 req/s/IP (Redis)" as T3 #LightGreen
+rectangle "Domain Kernel — dominio puro\nsin dependencias externas\nNuevo poder: máx. 2 archivos, <3h" as T5 #LightGreen
+rectangle "Microservicios independientes\n+ aislamiento por clave Redis\nsala:{codigo}\n+ consumer groups Kafka por servicio" as T4 #LightGreen
+
+Q0 -right-> T0 : implementado por
+Q1 -right-> T1 : implementado por
+Q2 -right-> T2 : implementado por
+Q3 -right-> T3 : implementado por
+Q5 -right-> T5 : implementado por
+Q4 -right-> T4 : implementado por
+
+note bottom of T0
+  Cliente → Gateway → Kafka cmd.game →
+  Game → Redis State → Kafka gw.broadcast →
+  Gateway → cliente.
+  Estimado: ~40-50ms por disparo.
+  Medible con /kpis (Observability).
+end note
+
+note bottom of T1
+  0% de casillas resueltas dos
+  veces. SETNX en Redis es atómico.
+  Kafka ordena disparos por sala
+  (misma partición = mismo orden).
+end note
+
+note bottom of T2
+  Dos SPOFs independientes:
+  Redis falla → Kafka guarda eventos.
+  Kafka falla → Redis conserva estado.
+  >95% reconexiones exitosas en <3s.
+end note
+
+note bottom of T5
+  Domain Kernel aplicado en
+  Game Service (engine, board, etc.)
+  Cubierto ≥85% por unit tests Vitest.
+end note
+
+legend bottom center
+  Cada flecha es verificable: el atributo tiene un escenario de calidad numérico (EC-XX)
+  y la táctica tiene una implementación concreta en el código de los microservicios.
+end legend
+
+@enduml

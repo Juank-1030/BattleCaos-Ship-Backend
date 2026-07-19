@@ -1,0 +1,59 @@
+@startuml 04-evolucion-microservicios
+
+title Evolución del Sistema — Estado Actual y Camino al MVP
+
+!theme plain
+left to right direction
+skinparam defaultFontName Consolas
+skinparam wrapWidth 190
+skinparam nodesep 45
+skinparam ranksep 70
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam rectangle {
+  BorderColor Black
+  FontSize 14
+}
+skinparam note {
+  BackgroundColor LightYellow
+  BorderColor Orange
+  FontSize 12
+}
+skinparam ArrowColor #333333
+skinparam ArrowFontSize 12
+
+rectangle "**COMPLETADO**\nCimientos + Comunicación\n─────────────────\nGateway :3000\n  JWT · Rate Limiting · /health · /kpis\n  Kafka producer + consumer\nAuth :3001\n  Google OAuth · JWT signing\nRoom Service\n  Kafka consumer (cmd.room)\n  Redis State para sala:{codigo}" as Hecho #LightGreen
+
+rectangle "**EN CONSTRUCCIÓN**\nMotor de Juego + Servicios de Soporte\n─────────────────\nGame Service\n  Domain Kernel (engine, board, fleet,\n  powers, salvo, countermeasure)\n  Kafka: cmd.game · evt.room · evt.timer\nTimer Service\n  Leader election SETNX · ticks 100ms\n  Kafka: evt.timer\nChat Service\n  Persistencia Redis · 100 mensajes\n  Kafka: cmd.chat · evt.room\nBot Service\n  Modo 1v1-bot · decisión aleatoria\n  Kafka: evt.game · evt.bot\nObservability Service\n  KPIs · audit log · métricas\n  Kafka: consume todos los evt.*" as EnCurso #LightYellow
+
+rectangle "**MVP FINAL**\nIntegración y Entrega\n─────────────────\nFrontend React + Vite\n  Socket.io client · Google Sign-In\n  Tablero naval · Lobby · Chat\nTodos los servicios integrados\nPruebas de integración E2E\nInfraestructura: Upstash Redis +\n  Upstash Kafka (mismo proveedor)\nPresentación: 8 julio 2026" as MVP #LightBlue
+
+Hecho -right-> EnCurso : próximos\nrepositorios
+EnCurso -right-> MVP : integración\nfrontend
+
+note bottom of Hecho
+  3 microservicios operativos.
+  Tests unitarios: 72 tests, 100% coverage.
+  Migración a Kafka completada (gateway + room).
+  Redis separado del bus de mensajería.
+  Costo despliegue: $0 (Upstash free tier).
+end note
+
+note bottom of EnCurso
+  Game es el más complejo.
+  Bot y Observability son no críticos
+  (si Chat cae, el juego continúa).
+  Todos usan Kafka para mensajería
+  y Redis solo para estado.
+end note
+
+note bottom of MVP
+  Presentación: 8 julio 2026.
+  Costo MVP: $0.
+  Escalabilidad futura: replicar
+  servicios individualmente según carga.
+  Kafka permite múltiples instancias
+  del mismo servicio (consumer groups).
+end note
+
+@enduml
