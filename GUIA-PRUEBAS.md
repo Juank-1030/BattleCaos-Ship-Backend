@@ -6,7 +6,7 @@ Comandos para **PowerShell en Windows** desde la carpeta raíz del proyecto (`E:
 
 > Rutas de referencia usadas abajo:
 > - Azure CLI: `az` (si no está en PATH: `"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"`)
-> - Gateway en Azure (dev): `https://battlecaosdev-gateway.victoriousriver-7e24b629.eastus2.azurecontainerapps.io`
+> - Gateway en Azure (dev): `https://battlecaosdev-gateway.orangeforest-5c4090bc.eastus2.azurecontainerapps.io`
 
 ---
 
@@ -126,7 +126,7 @@ coloca la flota y mide el round-trip hasta TURNOS:
 k6 run -e BASE_GW_WS=ws://localhost:3000 -e SECRET=<JWT_SECRET local> -e VUS=10 tools/k6/juego.js
 
 # Contra AZURE (SECRET = jwt_secret de battlecaos-infra/terraform/terraform.tfvars):
-k6 run -e BASE_GW_WS=wss://battlecaosdev-gateway.victoriousriver-7e24b629.eastus2.azurecontainerapps.io `
+k6 run -e BASE_GW_WS=wss://battlecaosdev-gateway.orangeforest-5c4090bc.eastus2.azurecontainerapps.io `
        -e SECRET=<jwt_secret> -e VUS=20 tools/k6/juego.js
 ```
 Umbrales que DEBEN pasar: `rt_crear_sala_ms p(95)<2000`, `rt_colocar_ms p(95)<2000`,
@@ -146,7 +146,7 @@ Los ~12 Container Apps (el "serverless" del proyecto) viven en el resource group
 az containerapp list -g battlecaosdev-rg --query "[].{app:name, estado:properties.runningStatus}" -o table
 
 # Salud REAL del gateway (verifica Redis Y el consumer de Kafka — si kafka!=ok, hay problema):
-Invoke-WebRequest "https://battlecaosdev-gateway.victoriousriver-7e24b629.eastus2.azurecontainerapps.io/health" | Select-Object -Expand Content
+Invoke-WebRequest "https://battlecaosdev-gateway.orangeforest-5c4090bc.eastus2.azurecontainerapps.io/health" | Select-Object -Expand Content
 # → {"service":"gateway","status":"ok","redis":"ok","kafka":"ok",...}
 
 # KPIs de negocio en vivo (los escribe observability, los sirve el gateway):

@@ -14,6 +14,11 @@ Juego de batalla naval multijugador en tiempo real (1v1 · 1v1 vs Bot · 2v2), p
 | Ver diagramas técnicos detallados (UML) | [`docs/diagramas/`](#-diagramas-técnicos-docsdiagramas) |
 | Preparar la presentación del proyecto | [`presentacion/`](#-presentación-presentacion) |
 | Repasar teoría de atributos de calidad | [`Criterios_de_calidad.md`](#-fundamentos-teóricos) / [`EscenariosCalidad.md`](#-fundamentos-teóricos) |
+| **Levantar y probar la observabilidad** (Prometheus, Grafana, Loki) | [`GUIA-PRUEBAS-OBSERVABILIDAD.md`](GUIA-PRUEBAS-OBSERVABILIDAD.md) |
+| **Ver los diagramas** (contexto, componentes, despliegue, clases, ER, secuencia) | [`docs/DIAGRAMAS.md`](docs/DIAGRAMAS.md) |
+| **Ver el flujo de cada interacción** (login, sala, disparo, poder, chat, voz…) | [`docs/DIAGRAMAS-SECUENCIA.md`](docs/DIAGRAMAS-SECUENCIA.md) |
+| **Ver las clases de cada microservicio** (11 diagramas, uno por repositorio) | [`docs/DIAGRAMAS-CLASES.md`](docs/DIAGRAMAS-CLASES.md) |
+| **Revisar el cumplimiento de SOLID** (con evidencia del código) | [`docs/ANALISIS-SOLID.md`](docs/ANALISIS-SOLID.md) |
 
 ---
 
